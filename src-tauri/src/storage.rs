@@ -36,6 +36,34 @@ pub struct Catalog {
 pub struct RuntimeState {
     pub shuffle: ShuffleBag,
     pub catalogs: HashMap<String, Catalog>,
+    // IDs and hashed source identities only: never persist Photos' temporary URLs.
+    pub cache_owners: HashMap<String, CacheOwner>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CacheOwner {
+    pub source_id: String,
+    pub fingerprint: String,
+}
+
+pub fn own_cache(runtime: &mut RuntimeState, media: &MediaItem, source: &Source) {
+    runtime.cache_owners.insert(
+        media.id.clone(),
+        CacheOwner {
+            source_id: source.id.clone(),
+            fingerprint: source_fingerprint(source),
+        },
+    );
+}
+fn cache_id(id: &str) -> bool {
+    id.len() == 64 && id.bytes().all(|c| c.is_ascii_hexdigit())
+}
+pub fn prune_cache_owners(runtime: &mut RuntimeState, cache: &Path) {
+    runtime.cache_owners.retain(|id, _| {
+        cache_id(id)
+            && (cache.join(format!("{id}.img")).is_file()
+                || cache.join(format!("{id}-preview.png")).is_file())
+    });
 }
 
 pub fn source_fingerprint(source: &Source) -> String {
@@ -69,22 +97,54 @@ pub fn offline_items(source: &Source, catalog: Option<&Catalog>, cache: &Path) -
         .unwrap_or_default()
 }
 pub fn reconcile_catalogs(runtime: &mut RuntimeState, sources: &[Source], cache: &Path) {
-    runtime.catalogs.retain(|id, catalog| {
-        let retain = sources.iter().any(|s| {
-            s.id == *id
-                && s.enabled
-                && s.kind != "photos"
-                && catalog.fingerprint == source_fingerprint(s)
-        });
-        if !retain {
-            for media in &catalog.items {
-                let _ = fs::remove_file(cache.join(format!("{}.img", media.id)));
-                let _ = fs::remove_file(cache.join(format!("{}-preview.png", media.id)));
+    // Migrate ownership from older installations before discarding stale catalogs.
+    // This index then outlives catalog refreshes, including items no longer listed.
+    for (source_id, catalog) in &runtime.catalogs {
+        for media in &catalog.items {
+            if cache_id(&media.id) {
+                runtime
+                    .cache_owners
+                    .entry(media.id.clone())
+                    .or_insert(CacheOwner {
+                        source_id: source_id.clone(),
+                        fingerprint: catalog.fingerprint.clone(),
+                    });
             }
         }
-        retain
+    }
+    let enabled: HashMap<_, _> = sources
+        .iter()
+        .filter(|source| source.enabled)
+        .map(|source| (source.id.as_str(), source_fingerprint(source)))
+        .collect();
+    runtime.cache_owners.retain(|id, owner| {
+        cache_id(id) && enabled.get(owner.source_id.as_str()) == Some(&owner.fingerprint)
     });
+    runtime.catalogs.retain(|id, catalog| {
+        enabled.get(id.as_str()) == Some(&catalog.fingerprint)
+            && sources
+                .iter()
+                .any(|source| source.id == *id && source.kind != "photos")
+    });
+    // Older Photos downloads and stale originals have no recoverable owner.
+    // Purging unknown files also handles a crash between writing an index and a file.
+    if let Ok(entries) = fs::read_dir(cache) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            let id = name
+                .strip_suffix(".img")
+                .or_else(|| name.strip_suffix("-preview.png"));
+            if !id.is_some_and(|id| runtime.cache_owners.contains_key(id))
+                && entry.file_type().is_ok_and(|kind| kind.is_file())
+            {
+                let _ = fs::remove_file(entry.path());
+            }
+        }
+    }
+    prune_cache_owners(runtime, cache);
 }
+
 impl Store {
     pub fn new(root: PathBuf, cache: PathBuf) -> Result<Self, String> {
         fs::create_dir_all(&root).map_err(|e| e.to_string())?;

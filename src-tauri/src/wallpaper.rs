@@ -71,24 +71,41 @@ pub fn render(
     Ok(output.into_inner())
 }
 
-pub fn apply(bytes: &[u8], settings: &Settings, cache: &Path) -> Result<PathBuf, String> {
+pub fn prepare(bytes: &[u8], settings: &Settings, directory: &Path) -> Result<PathBuf, String> {
+    #[cfg(windows)]
+    let dimensions = unsafe {
+        #[link(name = "user32")]
+        extern "system" {
+            fn GetSystemMetrics(index: i32) -> i32;
+        }
+        (
+            GetSystemMetrics(0).max(1) as u32,
+            GetSystemMetrics(1).max(1) as u32,
+        )
+    };
+    #[cfg(not(windows))]
+    let dimensions = (1920, 1080);
+    let bitmap = render(bytes, settings, dimensions)?;
+    std::fs::create_dir_all(directory).map_err(|e| e.to_string())?;
+    static SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let sequence = SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    // Each concurrent render owns its output until it is committed or cancelled.
+    let path = directory.join(format!(
+        "wallpaper-{}-{sequence}.bmp",
+        chrono::Utc::now().timestamp_millis()
+    ));
+    atomic_write(&path, &bitmap)?;
+    Ok(path)
+}
+
+pub fn apply_prepared(path: &Path, directory: &Path) -> Result<(), String> {
     #[cfg(windows)]
     {
         use std::os::windows::ffi::OsStrExt;
         #[link(name = "user32")]
         extern "system" {
-            fn GetSystemMetrics(index: i32) -> i32;
             fn SystemParametersInfoW(action: u32, param: u32, data: *const u16, flags: u32) -> i32;
         }
-        let (width, height) = unsafe { (GetSystemMetrics(0), GetSystemMetrics(1)) };
-        let bitmap = render(bytes, settings, (width.max(1) as u32, height.max(1) as u32))?;
-        std::fs::create_dir_all(cache).map_err(|e| e.to_string())?;
-        // Alternate files ensure a failed decode/write never damages the wallpaper currently on screen.
-        let path = cache.join(format!(
-            "wallpaper-{}.bmp",
-            chrono::Utc::now().timestamp_millis()
-        ));
-        atomic_write(&path, &bitmap)?;
         let desktop = winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER)
             .open_subkey_with_flags("Control Panel\\Desktop", winreg::enums::KEY_SET_VALUE)
             .map_err(|e| e.to_string())?;
@@ -100,26 +117,23 @@ pub fn apply(bytes: &[u8], settings: &Settings, cache: &Path) -> Result<PathBuf,
             .map_err(|e| e.to_string())?;
         let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
         if unsafe { SystemParametersInfoW(0x0014, 0, wide.as_ptr(), 0x1 | 0x2) } == 0 {
-            let _ = std::fs::remove_file(&path);
             return Err(format!(
                 "Windows could not apply the wallpaper: {}",
                 std::io::Error::last_os_error()
             ));
         }
-        // The active OS wallpaper is outside the bounded download/preview cache.
-        // Keep the previous file until Windows accepts its replacement.
-        if let Ok(entries) = std::fs::read_dir(cache) {
+        if let Ok(entries) = std::fs::read_dir(directory) {
             for entry in entries.flatten() {
                 if entry.path() != path && entry.path().extension().is_some_and(|e| e == "bmp") {
                     let _ = std::fs::remove_file(entry.path());
                 }
             }
         }
-        Ok(path)
+        Ok(())
     }
     #[cfg(not(windows))]
     {
-        let _ = (bytes, settings, cache);
+        let _ = (path, directory);
         Err("This desktop build can apply wallpapers only on Windows.".into())
     }
 }

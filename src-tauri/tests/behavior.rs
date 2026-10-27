@@ -212,3 +212,53 @@ fn disconnected_source_erases_downloads_absent_from_latest_listing() {
     reconcile_catalogs(&mut runtime, &[], cache.path());
     assert!(!cache.path().join(format!("{id}.img")).exists());
 }
+
+#[test]
+fn photos_cache_ownership_survives_restart_without_saving_temporary_urls() {
+    use wallta_lib::{
+        providers::item,
+        storage::{own_cache, reconcile_catalogs, RuntimeState},
+    };
+    let mut source: wallta_lib::models::Source = serde_json::from_str(
+        r#"{"id":"photos","name":"Photos","kind":"photos","location":"device","enabled":true}"#,
+    )
+    .unwrap();
+    let media = item(
+        "https://example.com/temporary-secret-url".into(),
+        None,
+        &source.id,
+    );
+    let cache = tempfile::tempdir().unwrap();
+    let path = cache.path().join(format!("{}-preview.png", media.id));
+    std::fs::write(&path, b"cached").unwrap();
+    let mut runtime = RuntimeState::default();
+    own_cache(&mut runtime, &media, &source);
+    let encoded = serde_json::to_string(&runtime).unwrap();
+    assert!(!encoded.contains("temporary-secret-url"));
+    let mut runtime: RuntimeState = serde_json::from_str(&encoded).unwrap();
+    reconcile_catalogs(&mut runtime, &[source.clone()], cache.path());
+    assert!(path.exists());
+    assert_eq!(runtime.cache_owners.len(), 1);
+    source.enabled = false;
+    reconcile_catalogs(&mut runtime, &[source], cache.path());
+    assert!(!path.exists());
+    assert!(runtime.cache_owners.is_empty());
+}
+
+#[test]
+fn orphaned_legacy_cache_is_purged_and_eviction_prunes_ownership() {
+    use wallta_lib::{
+        providers::item,
+        storage::{own_cache, prune_cache_owners, reconcile_catalogs, RuntimeState},
+    };
+    let source: wallta_lib::models::Source = serde_json::from_str(r#"{"id":"a","name":"Album","kind":"url","location":"https://example.com/a.png","enabled":true}"#).unwrap();
+    let media = item(source.location.clone(), None, &source.id);
+    let cache = tempfile::tempdir().unwrap();
+    std::fs::write(cache.path().join("unowned.img"), b"legacy").unwrap();
+    let mut runtime = RuntimeState::default();
+    reconcile_catalogs(&mut runtime, &[source.clone()], cache.path());
+    assert_eq!(std::fs::read_dir(cache.path()).unwrap().count(), 0);
+    own_cache(&mut runtime, &media, &source);
+    prune_cache_owners(&mut runtime, cache.path());
+    assert!(runtime.cache_owners.is_empty());
+}

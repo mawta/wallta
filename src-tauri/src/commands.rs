@@ -23,7 +23,9 @@ pub struct Engine {
     pub store: Store,
     pub client: reqwest::blocking::Client,
     pub revision: AtomicU64,
+    rotation: Mutex<()>,
 }
+#[derive(Clone)]
 pub struct Runtime {
     pub state: AppState,
     pub next_due: Instant,
@@ -48,6 +50,7 @@ impl Engine {
             }
         };
         storage::reconcile_catalogs(&mut persistent, &state.sources, &store.cache);
+        store.save_runtime(&persistent)?;
         let wallpaper_path = fs::read_dir(store.root.join("wallpaper"))
             .ok()
             .and_then(|entries| {
@@ -68,6 +71,7 @@ impl Engine {
             store,
             client: providers::client()?,
             revision: AtomicU64::new(0),
+            rotation: Mutex::new(()),
         })
     }
     pub fn snapshot(&self) -> Result<AppState, String> {
@@ -81,12 +85,11 @@ impl Engine {
         &self,
         state: &AppState,
         persistent: &mut RuntimeState,
+        revision: u64,
     ) -> (Vec<MediaItem>, Vec<String>) {
-        let revision = self.revision.load(Ordering::SeqCst);
         let mut images = vec![];
         let mut errors = vec![];
         let wifi = !state.settings.wifi_only || wallpaper::wifi_connected();
-        storage::reconcile_catalogs(persistent, &state.sources, &self.store.cache);
         for source in state.sources.iter().filter(|s| s.enabled) {
             if self.revision.load(Ordering::SeqCst) != revision {
                 break;
@@ -128,54 +131,97 @@ impl Engine {
         (images, errors)
     }
     pub fn list_media(&self) -> Result<Vec<MediaItem>, String> {
+        let (snapshot, revision) = self.operation_snapshot()?;
+        let mut persistent = snapshot.persistent;
+        let (images, errors) = self.list(&snapshot.state, &mut persistent, revision);
         let mut runtime = self.inner.lock().map_err(|e| e.to_string())?;
-        let state = runtime.state.clone();
-        let (images, errors) = self.list(&state, &mut runtime.persistent);
+        if self.revision.load(Ordering::SeqCst) != revision {
+            return Ok(runtime.media.clone());
+        }
+        runtime.persistent.catalogs = persistent.catalogs;
         runtime.state.error = (!errors.is_empty()).then(|| errors.join("\n"));
         runtime.media = images.clone();
         self.store.save_runtime(&runtime.persistent)?;
         Ok(images)
     }
-    pub fn rotate(&self, automatic: bool) -> Result<AppState, String> {
-        let revision = self.revision.load(Ordering::SeqCst);
+    fn operation_snapshot(&self) -> Result<(Runtime, u64), String> {
+        let runtime = self.inner.lock().map_err(|e| e.to_string())?;
+        Ok((runtime.clone(), self.revision.load(Ordering::SeqCst)))
+    }
+    fn source_is_current(&self, runtime: &Runtime, source: &Source, revision: u64) -> bool {
+        self.revision.load(Ordering::SeqCst) == revision
+            && runtime.state.sources.iter().any(|current| {
+                current.enabled
+                    && current.id == source.id
+                    && storage::source_fingerprint(current) == storage::source_fingerprint(source)
+            })
+    }
+    fn persist_cache(&self, runtime: &mut Runtime) -> Result<(), String> {
+        self.trim_cache(runtime.state.settings.cache_limit_mb, None)?;
+        storage::prune_cache_owners(&mut runtime.persistent, &self.store.cache);
+        self.store.save_runtime(&runtime.persistent)
+    }
+    fn cache_bytes(
+        &self,
+        media: &MediaItem,
+        source: &Source,
+        revision: u64,
+        suffix: &str,
+        bytes: &[u8],
+    ) -> Result<(), String> {
         let mut runtime = self.inner.lock().map_err(|e| e.to_string())?;
+        if !self.source_is_current(&runtime, source, revision) {
+            return Err("Image request cancelled because settings changed.".into());
+        }
+        storage::own_cache(&mut runtime.persistent, media, source);
+        // Write ownership first: every published file remains attributable after a crash.
+        self.store.save_runtime(&runtime.persistent)?;
+        storage::atomic_write(
+            &self.store.cache.join(format!("{}{suffix}", media.id)),
+            bytes,
+        )?;
+        self.persist_cache(&mut runtime)
+    }
+    pub fn rotate(&self, automatic: bool) -> Result<AppState, String> {
+        // Serialize rotations without blocking state, settings, or pause controls.
+        let _rotation = self.rotation.lock().map_err(|e| e.to_string())?;
+        let (mut snapshot, revision) = self.operation_snapshot()?;
         if automatic {
             let now = chrono::Local::now();
-            if !runtime.state.running
-                || Instant::now() < runtime.next_due
+            if !snapshot.state.running
+                || Instant::now() < snapshot.next_due
                 || !rotation::schedule_allows(
-                    &runtime.state.settings,
+                    &snapshot.state.settings,
                     now.weekday().num_days_from_sunday(),
                     now.hour() * 60 + now.minute(),
                 )
             {
-                return Ok(storage::public_state(&mut runtime.state));
+                return Ok(storage::public_state(&mut snapshot.state));
             }
         }
-        let state = runtime.state.clone();
-        let (mut items, mut errors) = self.list(&state, &mut runtime.persistent);
-        if self.revision.load(Ordering::SeqCst) != revision {
-            return Ok(storage::public_state(&mut runtime.state));
-        }
-        runtime.media = items.clone();
-        let previous = runtime
+        let (mut items, mut errors) =
+            self.list(&snapshot.state, &mut snapshot.persistent, revision);
+        let media_list = items.clone();
+        let previous = snapshot
             .state
             .current
             .as_ref()
             .and_then(|c| items.iter().position(|i| i.id == c.id));
-        let shuffle = runtime.state.settings.order == "shuffle";
+        let shuffle = snapshot.state.settings.order == "shuffle";
         let ids: Vec<String> = items.iter().map(|m| m.id.clone()).collect();
         if !shuffle {
             if let Some(index) = rotation::choose_index(items.len(), previous, false) {
                 items.rotate_left(index);
             }
         }
-        // Try another image if the first item is corrupt. Never replace current on failure.
         let mut applied = false;
         for attempt in 0..items.len().min(20) {
+            if self.revision.load(Ordering::SeqCst) != revision {
+                return self.snapshot();
+            }
             let media = if shuffle {
-                let previous = runtime.state.current.as_ref().map(|m| m.id.clone());
-                let Some(id) = runtime.persistent.shuffle.next(&ids, previous.as_deref()) else {
+                let previous = snapshot.state.current.as_ref().map(|m| m.id.clone());
+                let Some(id) = snapshot.persistent.shuffle.next(&ids, previous.as_deref()) else {
                     break;
                 };
                 let Some(media) = items.iter().find(|m| m.id == id) else {
@@ -185,11 +231,8 @@ impl Engine {
             } else {
                 &items[attempt]
             };
-            if self.revision.load(Ordering::SeqCst) != revision {
-                return Ok(storage::public_state(&mut runtime.state));
-            }
             if items.len() > 1
-                && runtime
+                && snapshot
                     .state
                     .current
                     .as_ref()
@@ -197,34 +240,57 @@ impl Engine {
             {
                 continue;
             }
-            let source = runtime
+            let Some(source) = snapshot
                 .state
                 .sources
                 .iter()
                 .find(|s| s.id == media.source_id)
-                .unwrap();
-            match self
-                .prepare(media, source, &runtime.state.settings)
+            else {
+                continue;
+            };
+            let result = self
+                .prepare(media, source, &snapshot.state.settings, revision)
                 .and_then(|bytes| {
-                    if self.revision.load(Ordering::SeqCst) != revision {
-                        return Err("Wallpaper change cancelled because settings changed.".into());
-                    }
-                    wallpaper::apply(
+                    wallpaper::prepare(
                         &bytes,
-                        &runtime.state.settings,
+                        &snapshot.state.settings,
                         &self.store.root.join("wallpaper"),
                     )
-                }) {
-                Ok(path) => {
+                });
+            let path = match result {
+                Ok(path) => path,
+                Err(error) => {
+                    errors.push(format!("{}: {error}", media.name));
+                    continue;
+                }
+            };
+            // Decode/render has finished. Only the short OS commit is serialized with controls.
+            let mut runtime = self.inner.lock().map_err(|e| e.to_string())?;
+            if !self.source_is_current(&runtime, source, revision) {
+                let _ = fs::remove_file(path);
+                return Ok(storage::public_state(&mut runtime.state));
+            }
+            match wallpaper::apply_prepared(&path, &self.store.root.join("wallpaper")) {
+                Ok(()) => {
                     runtime.wallpaper_path = Some(path);
                     runtime.state.current = Some(media.clone());
                     runtime.state.last_changed = Some(chrono::Utc::now().to_rfc3339());
                     applied = true;
                     break;
                 }
-                Err(e) => errors.push(format!("{}: {e}", media.name)),
+                Err(error) => {
+                    let _ = fs::remove_file(path);
+                    errors.push(format!("{}: {error}", media.name));
+                }
             }
         }
+        let mut runtime = self.inner.lock().map_err(|e| e.to_string())?;
+        if self.revision.load(Ordering::SeqCst) != revision {
+            return Ok(storage::public_state(&mut runtime.state));
+        }
+        runtime.persistent.catalogs = snapshot.persistent.catalogs;
+        runtime.persistent.shuffle = snapshot.persistent.shuffle;
+        runtime.media = media_list;
         if items.is_empty() && errors.is_empty() {
             errors.push("No images found. Enable a source and add a supported image.".into());
         }
@@ -235,12 +301,8 @@ impl Engine {
             } else {
                 30
             });
-        self.trim_cache(
-            runtime.state.settings.cache_limit_mb,
-            runtime.wallpaper_path.as_deref(),
-        )?;
         self.store.save(&runtime.state)?;
-        self.store.save_runtime(&runtime.persistent)?;
+        self.persist_cache(&mut runtime)?;
         Ok(storage::public_state(&mut runtime.state))
     }
     fn prepare(
@@ -248,6 +310,7 @@ impl Engine {
         media: &MediaItem,
         source: &Source,
         settings: &Settings,
+        revision: u64,
     ) -> Result<Vec<u8>, String> {
         if source.kind == "local" {
             let mut bytes = Vec::new();
@@ -266,10 +329,8 @@ impl Engine {
             return fs::read(path).map_err(|e| e.to_string());
         }
         let bytes = providers::download(&self.client, media, source)?;
-        // Decode before caching: HTML/error pages and broken images never become usable cache entries.
         wallpaper::render(&bytes, settings, (1, 1))?;
-        storage::atomic_write(&path, &bytes)?;
-        self.trim_cache(settings.cache_limit_mb, None)?;
+        self.cache_bytes(media, source, revision, ".img", &bytes)?;
         Ok(bytes)
     }
     fn trim_cache(&self, limit_mb: u64, keep: Option<&std::path::Path>) -> Result<(), String> {
@@ -302,8 +363,8 @@ impl Engine {
         Ok(())
     }
     pub fn set_running(&self, running: bool) -> Result<AppState, String> {
-        self.revision.fetch_add(1, Ordering::SeqCst);
         let mut runtime = self.inner.lock().map_err(|e| e.to_string())?;
+        self.revision.fetch_add(1, Ordering::SeqCst);
         let mut next = runtime.state.clone();
         next.running = running;
         next.error = None;
@@ -313,14 +374,14 @@ impl Engine {
         Ok(storage::public_state(&mut runtime.state))
     }
     pub fn preview(&self, id: &str) -> Result<String, String> {
-        let runtime = self.inner.lock().map_err(|e| e.to_string())?;
-        let media = runtime
+        let (snapshot, revision) = self.operation_snapshot()?;
+        let media = snapshot
             .media
             .iter()
             .find(|m| m.id == id)
-            .or_else(|| runtime.state.current.as_ref().filter(|m| m.id == id))
+            .or_else(|| snapshot.state.current.as_ref().filter(|m| m.id == id))
             .ok_or("Image is no longer in the library. Refresh the library first.")?;
-        let source = runtime
+        let source = snapshot
             .state
             .sources
             .iter()
@@ -329,24 +390,88 @@ impl Engine {
         let path = self.store.cache.join(format!("{}-preview.png", media.id));
         if !path.exists() {
             if source.kind != "local"
-                && runtime.state.settings.wifi_only
+                && snapshot.state.settings.wifi_only
                 && !wallpaper::wifi_connected()
                 && !self.store.cache.join(format!("{}.img", media.id)).is_file()
             {
                 return Err("Waiting for Wi-Fi before downloading preview.".into());
             }
-            let bytes = self.prepare(media, source, &runtime.state.settings)?;
+            let bytes = self.prepare(media, source, &snapshot.state.settings, revision)?;
             let preview = wallpaper::thumbnail(&bytes)?;
-            storage::atomic_write(&path, &preview)?;
-            self.trim_cache(
-                runtime.state.settings.cache_limit_mb,
-                runtime.wallpaper_path.as_deref(),
-            )?;
+            self.cache_bytes(media, source, revision, "-preview.png", &preview)?;
+        }
+        let runtime = self.inner.lock().map_err(|e| e.to_string())?;
+        if !self.source_is_current(&runtime, source, revision) {
+            return Err("Image request cancelled because settings changed.".into());
         }
         if !path.exists() {
             return Err("The cache is too small to retain this preview.".into());
         }
         Ok(path.to_string_lossy().into_owned())
+    }
+
+    pub fn save_state(&self, mut state: AppState) -> Result<AppState, String> {
+        if state.version != 1 {
+            return Err("Unsupported state version.".into());
+        }
+        state.settings.validate()?;
+        if state.sources.len() > 100 {
+            return Err("At most 100 sources are supported.".into());
+        }
+        let mut runtime = self.inner.lock().map_err(|e| e.to_string())?;
+        self.revision.fetch_add(1, Ordering::SeqCst);
+        let mut ids = HashSet::new();
+        for source in &mut state.sources {
+            if source.id.is_empty()
+                || source.id.len() > 128
+                || !source
+                    .id
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+                || !ids.insert(source.id.clone())
+            {
+                return Err("Source IDs must be unique and contain letters, digits, hyphens or underscores.".into());
+            }
+            if !["local", "url", "manifest", "webdav", "drive", "photos"]
+                .contains(&source.kind.as_str())
+            {
+                return Err("Unknown source type.".into());
+            }
+            if source.name.trim().is_empty() || source.location.trim().is_empty() {
+                return Err("Every source needs a name and location.".into());
+            }
+            if ["url", "manifest", "webdav"].contains(&source.kind.as_str()) {
+                providers::network_url(&source.location)?;
+            }
+            storage::merge_credentials(
+                source,
+                runtime.state.sources.iter().find(|s| s.id == source.id),
+            );
+        }
+        // Native runtime owns wallpaper status. A stale UI cannot overwrite a successful background change.
+        state.current = runtime.state.current.clone().filter(|media| {
+            let old = runtime.state.sources.iter().find(|s| s.id == media.source_id);
+            let new = state.sources.iter().find(|s| s.id == media.source_id && s.enabled);
+            matches!((old, new), (Some(old), Some(new)) if storage::source_fingerprint(old) == storage::source_fingerprint(new))
+        });
+        state.last_changed = runtime.state.last_changed.clone();
+        state.error = None;
+        if state.settings.autostart != runtime.state.settings.autostart {
+            wallpaper::set_autostart(state.settings.autostart)?;
+        }
+        self.store.save(&state)?;
+        for old in &runtime.state.sources {
+            if !state.sources.iter().any(|s| s.id == old.id) {
+                self.store.forget(old)?;
+            }
+        }
+        storage::reconcile_catalogs(&mut runtime.persistent, &state.sources, &self.store.cache);
+        runtime.media.clear();
+        self.store.save_runtime(&runtime.persistent)?;
+        runtime.state = state;
+        runtime.next_due = Instant::now();
+        self.persist_cache(&mut runtime)?;
+        Ok(storage::public_state(&mut runtime.state))
     }
 }
 
@@ -420,45 +545,19 @@ pub async fn pick_folder() -> Result<Option<String>, String> {
 }
 #[tauri::command]
 pub async fn save_state(
-    mut state: AppState,
+    state: AppState,
     engine: tauri::State<'_, Arc<Engine>>,
 ) -> Result<AppState, String> {
     let engine = engine.inner().clone();
-    engine.revision.fetch_add(1, Ordering::SeqCst);
-    blocking(move || {
-        if state.version != 1 { return Err("Unsupported state version.".into()); } state.settings.validate()?;
-        if state.sources.len() > 100 { return Err("At most 100 sources are supported.".into()); }
-        let mut runtime = engine.inner.lock().map_err(|e| e.to_string())?;
-        let mut ids = HashSet::new();
-        for source in &mut state.sources {
-            if source.id.is_empty() || source.id.len() > 128 || !source.id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') || !ids.insert(source.id.clone()) { return Err("Source IDs must be unique and contain letters, digits, hyphens or underscores.".into()); }
-            if !["local","url","manifest","webdav","drive","photos"].contains(&source.kind.as_str()) { return Err("Unknown source type.".into()); }
-            if source.name.trim().is_empty() || source.location.trim().is_empty() { return Err("Every source needs a name and location.".into()); }
-            if ["url","manifest","webdav"].contains(&source.kind.as_str()) { providers::network_url(&source.location)?; }
-            storage::merge_credentials(source, runtime.state.sources.iter().find(|s| s.id == source.id));
-        }
-        // Native runtime owns wallpaper status. A stale UI cannot overwrite a successful background change.
-        state.current = runtime.state.current.clone().filter(|media| {
-            let old = runtime.state.sources.iter().find(|s| s.id == media.source_id);
-            let new = state.sources.iter().find(|s| s.id == media.source_id && s.enabled);
-            matches!((old, new), (Some(old), Some(new)) if storage::source_fingerprint(old) == storage::source_fingerprint(new))
-        }); state.last_changed = runtime.state.last_changed.clone(); state.error = None;
-        if state.settings.autostart != runtime.state.settings.autostart { wallpaper::set_autostart(state.settings.autostart)?; }
-        engine.store.save(&state)?;
-        for old in &runtime.state.sources { if !state.sources.iter().any(|s| s.id == old.id) { engine.store.forget(old)?; } }
-        storage::reconcile_catalogs(&mut runtime.persistent, &state.sources, &engine.store.cache);
-        runtime.media.clear();
-        engine.store.save_runtime(&runtime.persistent)?;
-        runtime.state = state; runtime.next_due = Instant::now();
-        engine.trim_cache(runtime.state.settings.cache_limit_mb, runtime.wallpaper_path.as_deref())?;
-        Ok(storage::public_state(&mut runtime.state))
-    }).await
+    blocking(move || engine.save_state(state)).await
 }
+
 #[tauri::command]
 pub async fn clear_cache(engine: tauri::State<'_, Arc<Engine>>) -> Result<(), String> {
     let engine = engine.inner().clone();
     blocking(move || {
-        let runtime = engine.inner.lock().map_err(|e| e.to_string())?;
+        let mut runtime = engine.inner.lock().map_err(|e| e.to_string())?;
+        engine.revision.fetch_add(1, Ordering::SeqCst);
         for entry in fs::read_dir(&engine.store.cache).map_err(|e| e.to_string())? {
             let entry = entry.map_err(|e| e.to_string())?;
             if runtime.wallpaper_path.as_deref() != Some(entry.path().as_path())
@@ -467,6 +566,8 @@ pub async fn clear_cache(engine: tauri::State<'_, Arc<Engine>>) -> Result<(), St
                 fs::remove_file(entry.path()).map_err(|e| e.to_string())?;
             }
         }
+        runtime.persistent.cache_owners.clear();
+        engine.store.save_runtime(&runtime.persistent)?;
         Ok(())
     })
     .await
@@ -541,7 +642,7 @@ mod concurrency_tests {
 
     #[test]
     fn state_controls_remain_responsive_during_remote_listing() {
-        let (url, started, release, server) = delayed_server(b"[]".to_vec());
+        let (url, started, release, server) = delayed_server(br#"["late.png"]"#.to_vec());
         let (_dir, engine) = engine_for(url, "manifest");
         let worker_engine = engine.clone();
         let listing = thread::spawn(move || worker_engine.list_media());
@@ -552,20 +653,29 @@ mod concurrency_tests {
             tx.send(
                 controls
                     .snapshot()
-                    .and_then(|_| controls.set_running(false)),
+                    .and_then(|_| controls.set_running(false))
+                    .and_then(|mut state| {
+                        state.sources.clear();
+                        controls.save_state(state)
+                    }),
             )
             .unwrap();
         });
         let result = rx.recv_timeout(Duration::from_millis(500));
         release.send(()).unwrap();
         server.join().unwrap();
-        listing.join().unwrap().unwrap();
+        let images = listing.join().unwrap().unwrap();
         control.join().unwrap();
-        assert!(result.is_ok(), "State/pause was blocked by network I/O");
+        assert!(
+            result.is_ok(),
+            "State/pause/save was blocked by network I/O"
+        );
+        result.unwrap().unwrap();
+        assert!(images.is_empty(), "Removed source listing was published");
+        assert!(engine.inner.lock().unwrap().persistent.catalogs.is_empty());
     }
 
-    #[test]
-    fn cancelled_preview_never_publishes_downloads_after_pause() {
+    fn assert_cancelled_preview(disconnect: bool) {
         let mut png = std::io::Cursor::new(Vec::new());
         image::RgbImage::new(2, 2)
             .write_to(&mut png, image::ImageFormat::Png)
@@ -585,15 +695,56 @@ mod concurrency_tests {
         let controls = engine.clone();
         let (tx, rx) = mpsc::channel();
         let control = thread::spawn(move || {
-            tx.send(controls.set_running(false)).unwrap();
+            let outcome = if disconnect {
+                let mut state = controls.snapshot().unwrap();
+                state.sources.clear();
+                controls.save_state(state)
+            } else {
+                controls.set_running(false)
+            };
+            tx.send(outcome).unwrap();
         });
         let result = rx.recv_timeout(Duration::from_millis(500));
         release.send(()).unwrap();
         server.join().unwrap();
         let outcome = preview.join().unwrap();
         control.join().unwrap();
-        assert!(result.is_ok(), "Pause was blocked by image download");
+        assert!(result.is_ok(), "Control was blocked by image download");
+        result.unwrap().unwrap();
         assert!(outcome.is_err(), "Cancelled download published a preview");
         assert_eq!(fs::read_dir(&engine.store.cache).unwrap().count(), 0);
+    }
+    #[test]
+    fn cancelled_preview_never_publishes_downloads_after_pause() {
+        assert_cancelled_preview(false);
+    }
+    #[test]
+    fn removed_source_cannot_publish_a_late_download() {
+        assert_cancelled_preview(true);
+    }
+    #[test]
+    fn rotation_does_not_block_pause_while_download_is_pending() {
+        let (url, started, release, server) = delayed_server(b"corrupt image".to_vec());
+        let (_dir, engine) = engine_for(url, "url");
+        let worker = engine.clone();
+        let rotation = thread::spawn(move || worker.rotate(false));
+        started.recv_timeout(Duration::from_secs(5)).unwrap();
+        let control_engine = engine.clone();
+        let (tx, rx) = mpsc::channel();
+        let control = thread::spawn(move || tx.send(control_engine.set_running(false)).unwrap());
+        let result = rx.recv_timeout(Duration::from_millis(500));
+        release.send(()).unwrap();
+        server.join().unwrap();
+        rotation.join().unwrap().unwrap();
+        control.join().unwrap();
+        assert!(result.is_ok(), "Pause was blocked by rotation download");
+        result.unwrap().unwrap();
+        let runtime = engine.inner.lock().unwrap();
+        assert!(!runtime.state.running);
+        assert!(
+            runtime.state.error.is_none(),
+            "Cancelled operation overwrote paused state"
+        );
+        assert!(runtime.persistent.catalogs.is_empty());
     }
 }
