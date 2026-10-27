@@ -5,6 +5,8 @@ import { callNative, errorMessage, isAndroid, isNative } from '../lib/native';
 import { googlePollDelay, googleVerificationUrl, type GoogleStatus } from '../lib/google';
 import type { Source } from '../lib/types';
 
+const startingRequests = new Map<string, symbol>();
+
 export function GoogleConnect({ source, onConnected }: { source: Source; onConnected: (changes: Partial<Source>) => void }) {
   const [clientId, setClientId] = useState('');
   const [clientSecret, setClientSecret] = useState('');
@@ -40,15 +42,20 @@ export function GoogleConnect({ source, onConnected }: { source: Source; onConne
   const begin = async () => {
     if (relay && !relayUrl.trim()) { setError('Nhập địa chỉ HTTPS của Wallta Drive Relay.'); return; }
     if (!relay && !androidPhotos && !clientId.trim()) { setError('Nhập OAuth Client ID từ dự án Google của Sếpp.'); return; }
+    const request = Symbol();
+    startingRequests.set(source.id, request);
+    const cancelLateStart = async () => {
+      if (startingRequests.get(source.id) === request) await callNative('google_cancel', { sourceId: source.id, discardImports: true }).catch(() => {});
+    };
     setBusy(true); setError('');
     try {
       const next = await callNative<GoogleStatus>('google_begin', { sourceId: source.id, kind: source.kind, clientId: clientId.trim(), clientSecret: clientSecret.trim(), relayUrl: relayUrl.trim(), location: source.location, displayName: source.name || 'Wallta' });
-      if (!active.current) return;
+      if (!active.current) { await cancelLateStart(); return; }
       setStatus(next);
       if (next.phase === 'ready') onConnected({ location: next.location || source.location, kind: next.sourceKind || source.kind });
     }
-    catch (err) { setError(errorMessage(err)); }
-    finally { setBusy(false); }
+    catch (err) { if (active.current) setError(errorMessage(err)); else await cancelLateStart(); }
+    finally { if (startingRequests.get(source.id) === request) startingRequests.delete(source.id); if (active.current) setBusy(false); }
   };
   if (!isNative()) return <div className="inline-note">Kết nối tài khoản Google trong bản cài Wallta. Bản xem trước hỗ trợ thư mục local, link ảnh và danh sách JSON.</div>;
   return <div className="google-connect">

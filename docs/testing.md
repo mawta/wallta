@@ -13,7 +13,7 @@
 | Lỗi lưu/hủy OAuth UI | Mounted React regression tái hiện đóng lúc đang lưu, sau sửa không đóng qua nút/Escape cho tới khi xong |
 | Windows native | CI chạy Rust selection/schedule/parsers/cacheownership/offline/cancellation và OAuth PKCE/state; NSIS build đã thành công. Lượt cuối được ghi trong GitHub Actions |
 | Android native | CI compile Kotlin, chạy policy JVM tests và tạo debug APK. Phần hardware cần kiểm tra bên dưới |
-| Relay Laravel | 12 tests / 64 assertions đạt trên PHP 8.4, Google HTTP fake; PKCE/state, credential mã hóa, scope thư mục, refresh/disconnect, cancel và limiter riêng |
+| Relay Laravel | 10 tests / 62 assertions đạt trên PHP 8.4, Google HTTP fake; PKCE/state, credential mã hóa, scope thư mục, refresh/disconnect, cancel và limiter riêng |
 | Relay race review | Hai callback đồng thời: bên thua 410; hủy khi token exchange đang chạy: callback 410, không tạo lại pair; alias root chuyển ID chuẩn |
 | Dependency audit | npm và Composer audit không tìm thấy advisory tại thời điểm chạy 27/10/2026 |
 
