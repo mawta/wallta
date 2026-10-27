@@ -33,11 +33,16 @@ class LanImageValidatorTest {
         } finally { file.delete() }
     }
 
-    @Test fun rejectsReadableHeadersWithoutPixelData() {
+    @Test fun rejectsReadableHeadersWithCorruptPixelData() {
         val file = File.createTempFile("wallta-corrupt-", ".png")
         try {
-            // Keep IHDR and the IDAT header, but remove the compressed pixel stream.
-            file.writeBytes(png().copyOf(41))
+            // Keep all PNG metadata and framing, but break the IDAT zlib stream.
+            val bytes = png()
+            val idat = (8 until bytes.size - 4).first { index ->
+                bytes.copyOfRange(index, index + 4).contentEquals("IDAT".toByteArray())
+            }
+            bytes[idat + 4] = 0
+            file.writeBytes(bytes)
             val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
             BitmapFactory.decodeFile(file.absolutePath, bounds)
             assertEquals("Fixture must expose readable dimensions", 64, bounds.outWidth)
