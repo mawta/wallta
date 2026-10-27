@@ -77,17 +77,28 @@ class GoogleAmbient(private val context: Context, private val store: StateStore 
         save(id, j); return j.getString("accessToken")
     }
     fun media(source: JSONObject): List<Media> {
-        val id = source.getString("id"); val j = session(id, true)
+        val id = source.getString("id"); val manualToken = source.optString("accessToken").takeIf { it.isNotBlank() }
+        if (manualToken != null) {
+            val existing = store.get("googleManual:$id")
+            if (existing == null || existing.optString("deviceId") != source.getString("location")) store.put("googleManual:$id", JSONObject().put("deviceId", source.getString("location")))
+        }
+        val j = if (manualToken == null) session(id, true) else null
+        if (j != null) {
         require(j.optString("phase") == "ready" && j.optString("deviceId") == source.getString("location")) { "Select Photos albums on your phone first" }
         // Poll the device at catalog refresh, so deselection/revocation clears cached media.
         val status = poll(id, true); require(status.optString("phase") == "ready") { "Photos selection is not ready" }
+        } else {
+            val device = Net.json("$api/devices/${Net.enc(source.getString("location"))}", mapOf("Authorization" to "Bearer $manualToken"))
+            if (!device.optBoolean("mediaSourcesSet")) { MediaRepository(context, store).clearSource(id); error("Choose Photos albums for this Ambient device first") }
+        }
         var page = ""; val items = mutableListOf<Media>(); var pages = 0
         do {
-            val s = session(id, true); val today = LocalDate.now().toString()
+            val s = if (j != null) session(id, true) else store.get("googleManual:$id") ?: JSONObject()
+            val today = LocalDate.now().toString()
             if (s.optString("quotaDate") != today) s.put("quotaDate", today).put("quotaCount", 0)
             require(s.optInt("quotaCount") < 240) { "Photos daily request limit reached" }
-            s.put("quotaCount", s.optInt("quotaCount") + 1); save(id, s)
-            val data = Net.json("$api/mediaItems?deviceId=${Net.enc(source.getString("location"))}&pageSize=100&pageToken=${Net.enc(page)}", mapOf("Authorization" to "Bearer ${token(id)}"))
+            s.put("quotaCount", s.optInt("quotaCount") + 1); if (j != null) save(id, s) else store.put("googleManual:$id", s)
+            val data = Net.json("$api/mediaItems?deviceId=${Net.enc(source.getString("location"))}&pageSize=100&pageToken=${Net.enc(page)}", mapOf("Authorization" to "Bearer ${manualToken ?: token(id)}"))
             val a = data.optJSONArray("mediaItems") ?: JSONArray()
             for (i in 0 until a.length()) {
                 val item = a.getJSONObject(i); val file = item.optJSONObject("mediaFile") ?: continue
@@ -103,6 +114,8 @@ class GoogleAmbient(private val context: Context, private val store: StateStore 
         val j = store.get("google:$id")
         // Forget locally even if the device is offline or Google has already revoked access.
         MediaRepository(context, store).clearSource(id); store.put("google:$id", null)
+        store.put("googleManual:$id", null)
+        store.mutateState { state -> val sources = state.getJSONArray("sources"); for (i in 0 until sources.length()) { val source = sources.getJSONObject(i); if (source.optString("id") == id) source.remove("accessToken") } }
         if (j != null) {
             if (j.optString("deviceId").isNotBlank() && j.optString("accessToken").isNotBlank()) runCatching { Net.bytes("$api/devices/${Net.enc(j.getString("deviceId"))}", 1024 * 1024, mapOf("Authorization" to "Bearer ${j.getString("accessToken")}"), "DELETE") }
             j.optString("refreshToken", j.optString("accessToken")).takeIf { it.isNotBlank() }?.let { runCatching { Net.form("https://oauth2.googleapis.com/revoke", mapOf("token" to it)) } }

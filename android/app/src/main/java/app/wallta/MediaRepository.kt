@@ -27,6 +27,7 @@ class MediaRepository(private val context: Context, private val store: StateStor
         for (i in 0 until sources.length()) {
             val s = sources.getJSONObject(i); if (!s.optBoolean("enabled", true)) continue
             val id = s.getString("id"); val key = "catalog:$id"; val cached = store.get(key)
+            val revision = store.revision(); val epoch = store.get("cacheEpoch")?.optLong("value") ?: 0L
             val existing = cached?.optJSONArray("items")?.let { a -> (0 until a.length()).map { Media.from(a.getJSONObject(it)) } } ?: emptyList()
             val online = networkAllowed(settings)
             if (s.getString("kind") != "local" && !online) {
@@ -45,7 +46,12 @@ class MediaRepository(private val context: Context, private val store: StateStor
                     "photos" -> GoogleAmbient(context, store).media(s)
                     else -> emptyList()
                 }
-                val a = JSONArray(); items.forEach { a.put(it.json()) }; store.put(key, JSONObject().put("time", System.currentTimeMillis()).put("items", a)); result += items
+                val a = JSONArray(); items.forEach { a.put(it.json()) }
+                synchronized(StateStore.lock) {
+                    check(store.revision() == revision && (store.get("cacheEpoch")?.optLong("value") ?: 0L) == epoch && !Thread.currentThread().isInterrupted) { "Catalog operation cancelled by newer state or source removal" }
+                    store.put(key, JSONObject().put("time", System.currentTimeMillis()).put("items", a))
+                }
+                result += items
             } catch (e: Exception) {
                 if (s.getString("kind") != "photos") result += existing.filter { cacheFile(it.id).exists() }
                 else if ((e as? ApiError)?.status in listOf(401, 403, 404)) { clearSource(id); store.put(key, null) }
@@ -79,7 +85,7 @@ class MediaRepository(private val context: Context, private val store: StateStor
         return when (source.getString("kind")) {
             "webdav" -> mapOf("Authorization" to "Basic " + Base64.encodeToString("${source.optString("username")}:${source.optString("password")}".toByteArray(), Base64.NO_WRAP))
             "drive" -> (DriveRelay(store).session(media.sourceId)?.optString("token")?.takeIf { it.isNotBlank() } ?: source.optString("accessToken").takeIf { it.isNotBlank() })?.let { mapOf("Authorization" to "Bearer $it") } ?: emptyMap()
-            "photos" -> mapOf("Authorization" to "Bearer " + GoogleAmbient(context, store).token(media.sourceId))
+            "photos" -> mapOf("Authorization" to "Bearer " + (source.optString("accessToken").takeIf { it.isNotBlank() } ?: GoogleAmbient(context, store).token(media.sourceId)))
             else -> emptyMap()
         }
     }
@@ -148,7 +154,8 @@ class MediaRepository(private val context: Context, private val store: StateStor
         require((0 until sources.length()).any { sources.getJSONObject(it).optString("id") == media.sourceId && sources.getJSONObject(it).optBoolean("enabled", true) }) { "Source removed or disabled" }
         if (media.photos) {
             require(networkAllowed(store.state().getJSONObject("settings"))) { "Google Photos cannot be displayed offline" }
-            require(store.get("google:${media.sourceId}")?.optString("phase") == "ready") { "Google Photos disconnected" }
+            val manual = (0 until sources.length()).map { sources.getJSONObject(it) }.any { it.optString("id") == media.sourceId && it.optString("kind") == "photos" && it.optString("accessToken").isNotBlank() }
+            require(manual || store.get("google:${media.sourceId}")?.optString("phase") == "ready") { "Google Photos disconnected" }
             val cachedAt = store.get("cacheOwners")?.optJSONObject(media.id)?.optLong("createdAt") ?: 0L
             if (System.currentTimeMillis() - cachedAt > 60 * 60 * 1000) target.delete()
         }
@@ -178,11 +185,17 @@ class MediaRepository(private val context: Context, private val store: StateStor
         store.put("cacheOwners", ledger)
     }
     fun clearSource(source: String) = synchronized(StateStore.lock) {
+        store.invalidateCache()
         val ledger = store.get("cacheOwners") ?: JSONObject()
         ledger.keys().asSequence().toList().filter { ledger.getJSONObject(it).optString("source") == source }.forEach { cacheFile(it).delete(); ledger.remove(it) }
         store.put("cacheOwners", ledger); store.put("catalog:$source", null)
     }
-    fun clear() = synchronized(StateStore.lock) { dir.listFiles()?.forEach { it.delete() }; store.put("cacheOwners", null); store.put("cacheEpoch", JSONObject().put("value", (store.get("cacheEpoch")?.optLong("value") ?: 0L) + 1)) }
+    fun clear() = synchronized(StateStore.lock) { store.invalidateCache(); dir.listFiles()?.forEach { it.delete() }; store.put("cacheOwners", null) }
+    fun releaseUnusedGrants() {
+        val a = store.state().getJSONArray("sources")
+        val used = (0 until a.length()).map { a.getJSONObject(it) }.filter { it.optString("kind") == "local" }.map { it.optString("location") }.toSet()
+        context.contentResolver.persistedUriPermissions.filter { it.uri.toString() !in used }.forEach { runCatching { context.contentResolver.releasePersistableUriPermission(it.uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION) } }
+    }
     fun cleanup(old: JSONObject, updated: JSONObject) {
         val a = updated.getJSONArray("sources"); val now = (0 until a.length()).map { a.getJSONObject(it) }
         val b = old.getJSONArray("sources")
@@ -197,7 +210,6 @@ class MediaRepository(private val context: Context, private val store: StateStor
             }
             if (next != null && !next.optBoolean("enabled", true) && s.optString("kind") == "photos") clearSource(id)
         }
-        val used = now.filter { it.optString("kind") == "local" }.map { it.optString("location") }.toSet()
-        context.contentResolver.persistedUriPermissions.filter { it.uri.toString() !in used }.forEach { runCatching { context.contentResolver.releasePersistableUriPermission(it.uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION) } }
+        releaseUnusedGrants()
     }
 }

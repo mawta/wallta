@@ -86,6 +86,10 @@ class StateStore(private val context: Context) {
         this.state(true)
     }
     fun revision(): Long = synchronized(lock) { read().optLong("revision") }
+    fun invalidateCache() = synchronized(lock) {
+        val root = read(); root.put("revision", root.optLong("revision") + 1)
+        root.put("cacheEpoch", JSONObject().put("value", (root.optJSONObject("cacheEpoch")?.optLong("value") ?: 0L) + 1)); write(root)
+    }
     fun mutateState(block: (JSONObject) -> Unit): JSONObject = synchronized(lock) {
         val root = read(); val s = root.optJSONObject("state") ?: defaults(); block(s); root.put("state", s); write(root); state(true)
     }
