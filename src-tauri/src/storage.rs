@@ -177,6 +177,7 @@ impl Store {
         atomic_write(&self.root.join("state.json"), &bytes)
     }
     pub fn forget(&self, source: &Source) -> Result<(), String> {
+        crate::google::disconnect(&source.id)?;
         for field in ["password", "apiKey", "accessToken"] {
             put_secret(&source.id, field, None)?;
         }

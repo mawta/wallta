@@ -23,7 +23,7 @@ export class ShuffleCycle {
         const j = Math.floor(Math.random() * (i + 1));
         [this.remaining[i], this.remaining[j]] = [this.remaining[j], this.remaining[i]];
       }
-      if (this.remaining.length > 1 && this.remaining.at(-1) === current) {
+      if (this.remaining.length > 1 && this.remaining[this.remaining.length - 1] === current) {
         [this.remaining[0], this.remaining[this.remaining.length - 1]] = [this.remaining[this.remaining.length - 1], this.remaining[0]];
       }
     }

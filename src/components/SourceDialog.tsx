@@ -1,15 +1,17 @@
+import { uuid } from '../lib/compat';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { X, FolderOpen, ArrowUpRight, Check, ChevronDown } from 'lucide-react';
-import { isNative, callNative, registerPreviewFiles, errorMessage } from '../lib/native';
+import { isNative, isAndroid, callNative, registerPreviewFiles, errorMessage } from '../lib/native';
 import { validateSource } from '../lib/rules';
 import { sourceLabels, type Source, type SourceKind } from '../lib/types';
 import { SourceIcon } from './ui';
+import { GoogleConnect } from './GoogleConnect';
 
 interface Props { initial?: Source; initialKind?: SourceKind; onSave: (source: Source) => Promise<void>; onClose: () => void; busy: boolean }
 export function SourceDialog({ initial, initialKind = 'local', onSave, onClose, busy }: Props) {
   const dialog = useRef<HTMLDialogElement>(null);
   const picker = useRef<HTMLInputElement>(null);
-  const [source, setSource] = useState<Source>(() => initial || { id: crypto.randomUUID(), name: '', kind: initialKind, location: '', recursive: true, enabled: true });
+  const [source, setSource] = useState<Source>(() => initial || { id: uuid(), name: '', kind: initialKind, location: '', recursive: true, enabled: true });
   const [error, setError] = useState('');
   const [picking, setPicking] = useState(false);
   useEffect(() => { const element = dialog.current; element?.showModal(); return () => element?.close(); }, []);
@@ -53,7 +55,9 @@ export function SourceDialog({ initial, initialKind = 'local', onSave, onClose, 
         {source.kind === 'manifest' && <div className="inline-note">Nguồn trả về mảng link ảnh hoặc <code>{'{ "images": ["a.jpg", "b.webp"] }'}</code>. Link tương đối được tính theo địa chỉ danh sách.</div>}
         {source.kind === 'webdav' && <div className="field-pair"><label className="field">Tên đăng nhập<input autoComplete="off" value={source.username || ''} onChange={event => update({ username: event.target.value })} /></label><label className="field">Mật khẩu<input type="password" autoComplete="new-password" placeholder={initial ? 'Giữ mật khẩu đã lưu' : 'Mật khẩu WebDAV'} value={source.password ?? ''} onChange={event => update({ password: event.target.value })} /></label></div>}
         {source.kind === 'drive' && <div className="inline-note">Thư mục công khai dùng API key. Thư mục riêng cần quyền đọc Google Drive. Thông tin kết nối được lưu bảo mật trong bản cài.</div>}
-        {source.kind === 'photos' && <div className="inline-note">Dùng cho TV/khung ảnh qua Ambient API. Cần cấu hình dự án Google và cấp quyền chọn album. Không dùng Library API cũ để đọc toàn bộ Google Photos.</div>}
+        {source.kind === 'photos' && <div className="inline-note">{isAndroid() ? 'TV dùng Ambient API để chọn album. Điện thoại dùng trình chọn ảnh của hệ thống. Cần cấu hình dự án Google cho Ambient.' : 'Windows nhập những ảnh Sếpp chọn qua Google Photos Picker. Bộ ảnh được lưu trên máy và không tự đồng bộ album; TV dùng Ambient API để theo dõi album.'}</div>}
+        {['drive','webdav'].includes(source.kind) && <label className="checkbox-row"><input type="checkbox" checked={source.recursive} onChange={event => update({ recursive: event.target.checked })} /> Bao gồm thư mục con</label>}
+        {['drive','photos'].includes(source.kind) && <GoogleConnect key={source.kind} source={source} onConnected={update} />}
         {['drive','photos'].includes(source.kind) && <details className="advanced-settings" open={source.kind === 'photos'}><summary>Thông tin kết nối <ArrowUpRight size={13} /></summary>{source.kind === 'drive' && <label className="field">Google API key · thư mục công khai<input type="password" autoComplete="off" placeholder={initial ? 'Giữ API key đã lưu' : 'API key của dự án Google'} value={source.apiKey ?? ''} onChange={event => update({ apiKey: event.target.value })} /></label>}<label className="field">Access token · nguồn riêng<input type="password" autoComplete="off" placeholder={initial ? 'Giữ quyền truy cập đã lưu' : 'Token OAuth đã được cấp quyền'} value={source.accessToken ?? ''} onChange={event => update({ accessToken: event.target.value })} /></label><small>Token nhập thủ công có thể hết hạn. Hướng dẫn kết nối nằm trong tài liệu thiết lập Google của Wallta.</small></details>}
       </>}
       {error && <p className="form-error" role="alert">{error}</p>}

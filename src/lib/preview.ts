@@ -1,3 +1,4 @@
+import { cloneJson } from './compat';
 import { emptyState, defaultSettings, type AppState, type Source } from './types';
 import { clampSettings } from './rules';
 
@@ -11,11 +12,11 @@ export function persistablePreview(state: AppState): AppState {
 export function restorePreview(saved: string | null): AppState {
   try {
     const parsed = saved ? JSON.parse(saved) : {};
-    if (!parsed || parsed.version !== 1) return structuredClone(emptyState);
+    if (!parsed || parsed.version !== 1) return cloneJson(emptyState);
     return {
-      ...structuredClone(emptyState),
+      ...cloneJson(emptyState),
       sources: Array.isArray(parsed.sources) ? parsed.sources.filter((source: Source) => source && typeof source.id === 'string' && typeof source.location === 'string' && typeof source.name === 'string' && ['local','url','manifest','webdav','drive','photos'].includes(source.kind)) : [],
       settings: clampSettings({ ...defaultSettings, ...parsed.settings }, 5),
     };
-  } catch { return structuredClone(emptyState); }
+  } catch { return cloneJson(emptyState); }
 }

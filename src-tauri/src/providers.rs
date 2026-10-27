@@ -229,6 +229,8 @@ fn local_list(source: &Source) -> Result<Vec<MediaItem>, String> {
 }
 
 pub fn list_source(client: &Client, source: &Source) -> Result<Vec<MediaItem>, String> {
+    let resolved = crate::google::authorize_source(source)?;
+    let source = &resolved;
     match source.kind.as_str() {
         "local" => local_list(source),
         "url" => Ok(vec![item(
@@ -478,6 +480,8 @@ fn list_photos(client: &Client, source: &Source) -> Result<Vec<MediaItem>, Strin
 }
 
 pub fn download(client: &Client, media: &MediaItem, source: &Source) -> Result<Vec<u8>, String> {
+    let resolved = crate::google::authorize_source(source)?;
+    let source = &resolved;
     let url = network_url(&media.url)?;
     let mut request = client.get(url.clone());
     if source.kind == "webdav" && url.origin() == network_url(&source.location)?.origin() {

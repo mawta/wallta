@@ -1,3 +1,4 @@
+import { cloneJson } from './compat';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { callNative, errorMessage, isNative } from './native';
 import { isWithinSchedule } from './rules';
@@ -5,7 +6,7 @@ import { emptyState, defaultSettings, type AppState, type Capabilities, type Med
 
 const normalize = (state: AppState): AppState => ({ ...emptyState, ...state, settings: { ...defaultSettings, ...state.settings } });
 export function useWallta() {
-  const [state, setState] = useState<AppState>(structuredClone(emptyState));
+  const [state, setState] = useState<AppState>(cloneJson(emptyState));
   const [capabilities, setCapabilities] = useState<Capabilities | null>(null);
   const [media, setMedia] = useState<MediaItem[]>([]);
   const [busy, setBusy] = useState(false);
@@ -46,7 +47,9 @@ export function useWallta() {
     await refresh(); notify(message);
   });
   const next = useCallback(() => perform(async () => {
-    setState(normalize(await callNative<AppState>('next_wallpaper')));
+    const changed = normalize(await callNative<AppState>('next_wallpaper'));
+    setState(changed);
+    if (changed.error) { notify(changed.error, true); return; }
     notify(isNative() ? 'Đã cập nhật hình nền.' : 'Đã đổi ảnh trong bản xem trước.');
   }), [perform, notify]);
   const toggle = () => perform(async () => {

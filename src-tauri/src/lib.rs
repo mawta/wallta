@@ -1,4 +1,5 @@
 mod commands;
+pub mod google;
 pub mod models;
 pub mod providers;
 pub mod rotation;
@@ -102,7 +103,10 @@ pub fn run() {
             commands::set_running,
             commands::get_capabilities,
             commands::clear_cache,
-            commands::open_external
+            commands::open_external,
+            google::google_begin,
+            google::google_poll,
+            google::google_disconnect
         ])
         .run(tauri::generate_context!())
         .expect("Wallta failed to start");

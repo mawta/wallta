@@ -4,6 +4,7 @@ import react from '@vitejs/plugin-react'
 export default defineConfig({
   plugins: [react()],
   clearScreen: false,
+  build: { target: 'chrome87', cssTarget: 'chrome87' },
   server: { port: 1420, strictPort: true },
   envPrefix: ['VITE_', 'TAURI_ENV_*'],
 })

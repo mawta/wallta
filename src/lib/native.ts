@@ -1,3 +1,4 @@
+import { cloneJson, uuid } from './compat';
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { parseManifest, selectNext, ShuffleCycle } from './rules';
 import { persistablePreview, restorePreview } from './preview';
@@ -69,10 +70,10 @@ async function browserCall(command: string, args: Record<string, unknown>): Prom
   const state = getPreview();
   const save = () => {
     try { localStorage.setItem('wallta.preview.v1', JSON.stringify(persistablePreview(state))); } catch { /* Preview remains usable without storage. */ }
-    return structuredClone(state);
+    return cloneJson(state);
   };
   switch (command) {
-    case 'get_state': return structuredClone(state);
+    case 'get_state': return cloneJson(state);
     case 'get_capabilities': return { platform: 'browser', wallpaper: false, screensaver: false, minIntervalSeconds: 5, notes: ['Bản xem trước trong trình duyệt. Cài Wallta để đổi hình nền hệ thống và chạy nền.', 'Thư mục local chỉ khả dụng trong phiên đang mở. Nguồn online cần cho phép CORS.'] } satisfies Capabilities;
     case 'save_state': {
       const next = args.state as AppState;
@@ -104,7 +105,7 @@ async function browserCall(command: string, args: Record<string, unknown>): Prom
 export async function callNative<T>(command: string, args: Record<string, unknown> = {}): Promise<T> {
   if (isDesktop()) return invoke<T>(command, args);
   if (isAndroid()) return new Promise<T>((resolve, reject) => {
-    const id = crypto.randomUUID();
+    const id = uuid();
     const timer = setTimeout(() => { pending.delete(id); reject(new Error('Thiết bị phản hồi quá lâu. Hãy thử lại.')); }, command === 'pick_folder' ? 180000 : 90000);
     pending.set(id, { resolve: value => resolve(value as T), reject, timer });
     try { window.WalltaAndroid!.postMessage(JSON.stringify({ id, command, args })); }
