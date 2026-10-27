@@ -22,7 +22,7 @@ object Net {
     fun enc(s: String) = URLEncoder.encode(s, "UTF-8")
     fun bounded(input: InputStream, limit: Int): ByteArray {
         val out = java.io.ByteArrayOutputStream(); val buffer = ByteArray(32768); var total = 0
-        while (true) { val n = input.read(buffer); if (n < 0) break; total += n; require(total <= limit) { "Response exceeds size limit" }; out.write(buffer, 0, n) }
+        while (true) { check(!Thread.currentThread().isInterrupted) { "Read operation cancelled" }; val n = input.read(buffer); if (n < 0) break; total += n; require(total <= limit) { "Response exceeds size limit" }; out.write(buffer, 0, n) }
         return out.toByteArray()
     }
     fun bytes(url: String, limit: Int, headers: Map<String, String> = emptyMap(), method: String = "GET", body: String? = null, type: String = "application/json", tag: String? = null): ByteArray {

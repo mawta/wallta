@@ -56,6 +56,11 @@ class MediaRepository(private val context: Context, private val store: StateStor
         return result.distinctBy { it.id }.take(10000)
     }
     private fun local(s: JSONObject): List<Media> {
+        if (s.getString("location").startsWith("wallta-import://")) {
+            val folder = PhotoImporter.directory(context, s.getString("location")); val saved = store.session("import", s.getString("id"), true) ?: error("Imported photos are no longer available")
+            require(saved.optString("location") == s.getString("location")); val a = saved.optJSONArray("items") ?: JSONArray()
+            return (0 until a.length()).mapNotNull { i -> val entry = a.getJSONObject(i); val name = entry.getString("file"); if (!name.matches(Regex("[a-f0-9]{64}\\.img")) || !File(folder, name).isFile) null else Media(Policy.hash("${s.getString("id")}:${s.getString("location")}:$name"), entry.optString("name", "Photo"), "${s.getString("location")}/$name", s.getString("id")) }
+        }
         val root = DocumentFile.fromTreeUri(context, Uri.parse(s.getString("location"))) ?: error("Choose the folder again")
         val items = mutableListOf<Media>(); var visited = 0
         fun scan(folder: DocumentFile, depth: Int) {
@@ -148,13 +153,17 @@ class MediaRepository(private val context: Context, private val store: StateStor
             if (System.currentTimeMillis() - cachedAt > 60 * 60 * 1000) target.delete()
         }
         if (target.exists()) { target.setLastModified(System.currentTimeMillis()); return target }
-        val bytes = if (media.url.startsWith("content://")) context.contentResolver.openInputStream(Uri.parse(media.url))!!.use { Net.bounded(it, 25 * 1024 * 1024) }
+        val bytes = if (media.url.startsWith("wallta-import://")) {
+            val slash = media.url.lastIndexOf('/'); val location = media.url.substring(0, slash); val name = media.url.substring(slash + 1)
+            require(name.matches(Regex("[a-f0-9]{64}\\.img")))
+            File(PhotoImporter.directory(context, location), name).inputStream().use { Net.bounded(it, 25 * 1024 * 1024) }
+        } else if (media.url.startsWith("content://")) context.contentResolver.openInputStream(Uri.parse(media.url))!!.use { Net.bounded(it, 25 * 1024 * 1024) }
         else { require(networkAllowed(state.getJSONObject("settings"))) { "Network unavailable or Wi-Fi required" }; Net.bytes(media.url, 25 * 1024 * 1024, headers(media)) }
         val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
         android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
         require(bounds.outWidth > 0 && bounds.outHeight > 0 && bounds.outWidth.toLong() * bounds.outHeight <= 120_000_000) { "Invalid or oversized image" }
         synchronized(StateStore.lock) {
-            check(store.revision() == revision && (store.get("cacheEpoch")?.optLong("value") ?: 0L) == cacheEpoch) { "Image operation cancelled by newer state or cache clear" }
+            check(!Thread.currentThread().isInterrupted && store.revision() == revision && (store.get("cacheEpoch")?.optLong("value") ?: 0L) == cacheEpoch) { "Image operation cancelled by newer state or cache clear" }
             val temp = File.createTempFile("image-", ".tmp", dir)
             try { temp.writeBytes(bytes); require(temp.renameTo(target)) { "Cannot cache image" } } finally { temp.delete() }
             val ledger = store.get("cacheOwners") ?: JSONObject(); ledger.put(media.id, JSONObject().put("source", media.sourceId).put("photos", media.photos).put("createdAt", System.currentTimeMillis())); store.put("cacheOwners", ledger)
@@ -181,6 +190,7 @@ class MediaRepository(private val context: Context, private val store: StateStor
             val s = b.getJSONObject(i); val id = s.getString("id"); val next = now.find { it.optString("id") == id }
             if (next == null || next.optString("location") != s.optString("location") || next.optString("kind") != s.optString("kind")) {
                 clearSource(id)
+                if (s.optString("location").startsWith("wallta-import://")) PhotoImporter(context, store).remove(id, s.getString("location"))
                 val freshPhotos = next?.optString("kind") == "photos" && store.get("google:$id")?.optString("deviceId") == next.optString("location")
                 val freshDrive = next?.optString("kind") == "drive" && DriveRelay(store).session(id)?.optString("folder") == next.optString("location")
                 if (!freshPhotos && !freshDrive && s.optString("kind") in listOf("photos", "drive")) GoogleAmbient(context, store).disconnect(id)

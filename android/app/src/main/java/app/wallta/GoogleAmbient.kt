@@ -17,7 +17,7 @@ class GoogleAmbient(private val context: Context, private val store: StateStore 
     fun begin(args: JSONObject): JSONObject {
         if (args.optString("kind") == "drive") return DriveRelay(store).begin(args)
         require(args.optString("kind") == "photos") { "Unsupported Google source" }
-        if (context.getSystemService(UiModeManager::class.java).currentModeType != Configuration.UI_MODE_TYPE_TELEVISION) return JSONObject().put("phase", "error").put("message", "Photos Ambient is for supported TV devices. On this phone, choose Thư mục thiết bị to select a local/cloud DocumentsProvider folder, or use an online manifest. Google Photos does not expose a browsable folder through Android SAF on every device.")
+        if (context.getSystemService(UiModeManager::class.java).currentModeType != Configuration.UI_MODE_TYPE_TELEVISION) return PhotoImporter(context, store).begin(args.getString("sourceId"))
         val id = args.getString("sourceId"); require(id.length in 1..128)
         val client = args.getString("clientId").trim(); require(client.endsWith(".apps.googleusercontent.com")) { "Enter a TV and Limited Input OAuth client ID" }
         val request = UUID.randomUUID().toString(); val name = args.optString("displayName", "Wallta TV").take(100).ifBlank { "Wallta TV" }
@@ -109,6 +109,7 @@ class GoogleAmbient(private val context: Context, private val store: StateStore 
         }
     }
     fun cancel(id: String) {
+        PhotoImporter(context, store).cancel(id)
         DriveRelay(store).cancel(id)
         val j = store.takePending("google", id) ?: return
         Net.cancel(j.optString("nonce"))
