@@ -31,6 +31,8 @@ pub struct GoogleConnection {
     pub account: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selection_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connection_id: Option<String>,
     #[serde(default)]
     pub connected: bool,
 }
@@ -166,7 +168,7 @@ mod tests {
 
     #[test]
     fn google_connection_survives_state_round_trip() {
-        let metadata = json!({"provider":"drive", "account":"wallta@example.com", "selectionName":"Wallpapers", "connected":true});
+        let metadata = json!({"provider":"drive", "account":"wallta@example.com", "selectionName":"Wallpapers", "connected":true, "connectionId":"grant-a"});
         let state: AppState = serde_json::from_value(json!({"sources":[{
             "id":"drive", "name":"Drive", "kind":"drive", "location":"folder", "google":metadata
         }]}))
@@ -175,5 +177,15 @@ mod tests {
             serde_json::to_value(state).unwrap()["sources"][0]["google"],
             metadata
         );
+    }
+
+    #[test]
+    fn google_metadata_without_connection_id_migrates() {
+        let source: Source = serde_json::from_value(json!({
+            "id":"legacy", "name":"Drive", "kind":"drive", "location":"folder",
+            "google":{"provider":"drive", "connected":true}
+        }))
+        .unwrap();
+        assert!(source.google.unwrap().connection_id.is_none());
     }
 }
