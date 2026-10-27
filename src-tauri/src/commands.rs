@@ -270,6 +270,14 @@ impl Engine {
         self.persist_cache(&mut runtime)
     }
     pub fn rotate(&self, automatic: bool) -> Result<AppState, String> {
+        self.rotate_selection(automatic, None, false)
+    }
+    pub fn rotate_selection(
+        &self,
+        automatic: bool,
+        source_id: Option<&str>,
+        start_running: bool,
+    ) -> Result<AppState, String> {
         // Serialize rotations without blocking state, settings, or pause controls.
         let _rotation = self.rotation.lock().map_err(|e| e.to_string())?;
         let (mut snapshot, revision) = self.operation_snapshot()?;
@@ -286,9 +294,28 @@ impl Engine {
                 return Ok(storage::public_state(&mut snapshot.state));
             }
         }
-        let (mut items, mut errors) =
-            self.list(&snapshot.state, &mut snapshot.persistent, revision);
-        let media_list = items.clone();
+        let mut selection = snapshot.state.clone();
+        if let Some(id) = source_id {
+            selection
+                .sources
+                .retain(|source| source.id == id && source.enabled && !source.location.is_empty());
+            if selection.sources.is_empty() {
+                return Err("Chọn và bật một thư mục ảnh trước khi áp dụng.".into());
+            }
+        }
+        let (mut items, mut errors) = self.list(&selection, &mut snapshot.persistent, revision);
+        let mut media_list = if let Some(id) = source_id {
+            snapshot
+                .media
+                .iter()
+                .filter(|media| media.source_id != id)
+                .cloned()
+                .collect::<Vec<_>>()
+        } else {
+            vec![]
+        };
+        media_list.extend(items.clone());
+        let mut selection_shuffle = snapshot.persistent.shuffle.clone();
         let previous = snapshot
             .state
             .current
@@ -308,7 +335,7 @@ impl Engine {
             }
             let media = if shuffle {
                 let previous = snapshot.state.current.as_ref().map(|m| m.id.clone());
-                let Some(id) = snapshot.persistent.shuffle.next(&ids, previous.as_deref()) else {
+                let Some(id) = selection_shuffle.next(&ids, previous.as_deref()) else {
                     break;
                 };
                 let Some(media) = items.iter().find(|m| m.id == id) else {
@@ -362,6 +389,9 @@ impl Engine {
                     runtime.wallpaper_path = Some(path);
                     runtime.state.current = Some(media.clone());
                     runtime.state.last_changed = Some(chrono::Utc::now().to_rfc3339());
+                    if start_running {
+                        runtime.state.running = true;
+                    }
                     applied = true;
                     break;
                 }
@@ -376,7 +406,9 @@ impl Engine {
             return Ok(storage::public_state(&mut runtime.state));
         }
         runtime.persistent.catalogs = snapshot.persistent.catalogs;
-        runtime.persistent.shuffle = snapshot.persistent.shuffle;
+        if source_id.is_none() {
+            runtime.persistent.shuffle = selection_shuffle;
+        }
         runtime.media = media_list;
         if items.is_empty() && errors.is_empty() {
             errors.push("No images found. Enable a source and add a supported image.".into());
@@ -390,6 +422,13 @@ impl Engine {
             });
         self.store.save(&runtime.state)?;
         self.persist_cache(&mut runtime)?;
+        if source_id.is_some() && !applied {
+            return Err(runtime
+                .state
+                .error
+                .clone()
+                .unwrap_or_else(|| "Không thể áp dụng ảnh từ thư mục đã chọn.".into()));
+        }
         Ok(storage::public_state(&mut runtime.state))
     }
     fn prepare(
@@ -666,9 +705,16 @@ pub async fn get_preview(
     blocking(move || engine.preview(&id)).await
 }
 #[tauri::command]
-pub async fn next_wallpaper(engine: tauri::State<'_, Arc<Engine>>) -> Result<AppState, String> {
+pub async fn next_wallpaper(
+    source_id: Option<String>,
+    start_running: Option<bool>,
+    engine: tauri::State<'_, Arc<Engine>>,
+) -> Result<AppState, String> {
     let engine = engine.inner().clone();
-    blocking(move || engine.rotate(false)).await
+    blocking(move || {
+        engine.rotate_selection(false, source_id.as_deref(), start_running.unwrap_or(false))
+    })
+    .await
 }
 #[tauri::command]
 pub async fn set_running(

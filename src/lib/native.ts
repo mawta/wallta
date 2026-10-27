@@ -90,10 +90,12 @@ async function browserCall(command: string, args: Record<string, unknown>): Prom
       return items;
     }
     case 'next_wallpaper': {
-      const media = await browserCall('list_media', {}) as MediaItem[];
+      const allMedia = await browserCall('list_media', {}) as MediaItem[];
+      const media = typeof args.sourceId === 'string' ? allMedia.filter(item => item.sourceId === args.sourceId) : allMedia;
       const next = state.settings.order === 'shuffle' ? previewCycle.next(media, state.current?.id || null) : selectNext(media, state.current?.id || null, 'sequential');
       if (!next) throw new Error(state.error || 'Chưa có ảnh khả dụng. Thêm hoặc bật nguồn ảnh trước.');
       state.current = next;
+      if (args.startRunning === true) state.running = true;
       state.lastChanged = new Date().toISOString();
       return save();
     }

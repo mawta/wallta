@@ -35,7 +35,7 @@ class WalltaBridge(private val activity: MainActivity, private val web: WebView)
                     "set_running" -> { val state = store.setRunning(args.getBoolean("running")); WallpaperWorker.schedule(activity); state }
                     "list_media" -> JSONArray().apply { repo.list().forEach { put(it.json(true)) } }
                     "get_preview" -> { val mediaId = args.getString("id"); val media = repo.list().find { it.id == mediaId } ?: error("Image no longer available"); repo.visual(media); "${TrustedWebView.origin}/media/${media.id}.img" }
-                    "next_wallpaper" -> try { WallpaperEngine.apply(activity, true) } catch (e: Exception) { store.mutateState { it.put("error", e.message ?: "Wallpaper update failed") }; throw e }
+                    "next_wallpaper" -> try { val state = WallpaperEngine.apply(activity, true, args.optString("sourceId").takeIf { it.isNotBlank() }, args.optBoolean("startRunning")); WallpaperWorker.schedule(activity); state } catch (e: Exception) { store.mutateState { it.put("error", e.message ?: "Wallpaper update failed") }; throw e }
                     "get_capabilities" -> capabilities()
                     "update_status" -> updater.status()
                     "update_check" -> updater.check(args.optBoolean("automatic", false))

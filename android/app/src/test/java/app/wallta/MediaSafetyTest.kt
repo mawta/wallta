@@ -4,6 +4,12 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class MediaSafetyTest {
+    @Test fun applyingSourceNeverFallsBackToAnotherEnabledSource() {
+        val items = listOf(Media("a", "A", "a.jpg", "other", false), Media("b", "B", "b.jpg", "chosen", false))
+        assertEquals(listOf("b"), MediaSafety.forSource(items, "chosen").map { it.id })
+        assertEquals(items, MediaSafety.forSource(items, null))
+        assertTrue(MediaSafety.forSource(items, "missing").isEmpty())
+    }
     @Test fun visualDimensionsBoundBothOrientationsWithoutUpscaling() {
         assertEquals(2048 to 1536, MediaSafety.visualSize(12000, 9000))
         assertEquals(1536 to 2048, MediaSafety.visualSize(9000, 12000))

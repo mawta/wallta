@@ -1,6 +1,8 @@
 import type { SourceKind } from './types';
 
 export interface GoogleStatus {
+  account?: string;
+  selectionName?: string;
   phase: 'authorizing' | 'selecting' | 'ready' | 'error';
   verificationUrl?: string;
   userCode?: string;

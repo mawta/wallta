@@ -18,3 +18,16 @@
 @media(max-width:600px){.lan-connection{flex-direction:column;align-items:flex-start}.section-actions{justify-content:flex-start}}
 
 .app-updates h3{display:flex;align-items:center;gap:8px}.update-current{margin-left:auto;color:var(--muted);font-size:12px;font-weight:400}.update-row{display:flex;align-items:center;justify-content:space-between;gap:16px;min-height:40px}.update-status{display:flex;flex-direction:column;gap:5px;line-height:1.6}.update-actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}.update-progress{display:flex;align-items:center;gap:12px;margin-top:14px}.update-progress progress{width:100%;height:8px;accent-color:var(--accent)}.update-progress span{white-space:nowrap;font-size:11px;color:var(--muted)}.update-error{color:#ffb4a9;margin-top:12px;line-height:1.7;overflow-wrap:anywhere}.update-notes{margin-top:12px;font-size:12px;color:var(--muted);line-height:1.7}.update-notes summary{cursor:pointer;width:max-content}.update-notes p{white-space:pre-wrap;overflow-wrap:anywhere;margin-top:8px}.update-dot{width:7px;height:7px;background:var(--accent);border-radius:50%;margin-left:auto;flex-shrink:0}@media(max-width:600px){.update-row{align-items:flex-start;flex-direction:column}.update-actions{justify-content:flex-start;width:100%}}
+/* Google folder selection */
+.drive-folder-picker { display: grid; gap: 12px; padding: 14px; border: 1px solid var(--border, #dce3dd); border-radius: 12px; min-width: 0; }
+.drive-folder-tabs, .drive-breadcrumb { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.drive-folder-tabs .active { font-weight: 700; text-decoration: underline; }
+.drive-breadcrumb { font-size: 12px; }
+.drive-breadcrumb button { background: transparent; border: 0; color: inherit; cursor: pointer; padding: 3px; }
+.drive-folder-list { display: grid; gap: 4px; max-height: 230px; overflow: auto; }
+.drive-folder-list > button { display: flex; align-items: center; gap: 10px; background: transparent; text-align: left; padding: 12px; border: 1px solid transparent; border-radius: 8px; color: inherit; cursor: pointer; }
+.drive-folder-list > button:hover, .drive-folder-list > button:focus-visible { background: #edf3ee; border-color: #b8cbbb; }
+.drive-folder-list > button span { overflow-wrap: anywhere; }
+.source-card-title small { display: block; color: #718078; font-size: 11px; overflow-wrap: anywhere; }
+.source-card-title .text-button { margin-top: 5px; font-size: 11px; }
+.source-card-title { min-width: 0; }
