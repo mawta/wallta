@@ -1,5 +1,5 @@
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
-import { parseManifest, selectNext } from './rules';
+import { parseManifest, selectNext, ShuffleCycle } from './rules';
 import { persistablePreview, restorePreview } from './preview';
 import type { AppState, Capabilities, MediaItem, Source } from './types';
 
@@ -24,6 +24,7 @@ window.__walltaReply = (id, success, value) => {
 };
 let previewState: AppState | undefined;
 const localMedia = new Map<string, MediaItem[]>();
+const previewCycle = new ShuffleCycle();
 function getPreview(): AppState {
   if (!previewState) {
     let saved: string | null = null;
@@ -89,7 +90,7 @@ async function browserCall(command: string, args: Record<string, unknown>): Prom
     }
     case 'next_wallpaper': {
       const media = await browserCall('list_media', {}) as MediaItem[];
-      const next = selectNext(media, state.current?.id || null, state.settings.order);
+      const next = state.settings.order === 'shuffle' ? previewCycle.next(media, state.current?.id || null) : selectNext(media, state.current?.id || null, 'sequential');
       if (!next) throw new Error(state.error || 'Chưa có ảnh khả dụng. Thêm hoặc bật nguồn ảnh trước.');
       state.current = next;
       state.lastChanged = new Date().toISOString();

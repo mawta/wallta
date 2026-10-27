@@ -19,10 +19,10 @@ export function useWallta() {
     setState(normalize(await callNative<AppState>('get_state')));
   }, []);
   const perform = useCallback(async (operation: () => Promise<void>) => {
-    if (lock.current) return;
+    if (lock.current) return false;
     lock.current = true; setBusy(true);
-    try { await operation(); }
-    catch (error) { notify(errorMessage(error), true); }
+    try { await operation(); return true; }
+    catch (error) { notify(errorMessage(error), true); return false; }
     finally { lock.current = false; setBusy(false); }
   }, [notify]);
   useEffect(() => {

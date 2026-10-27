@@ -7,6 +7,31 @@ export function selectNext(items: MediaItem[], current: string | null, order: Se
   return candidates[Math.floor(Math.random() * candidates.length)] ?? null;
 }
 
+export class ShuffleCycle {
+  private catalog = '';
+  private remaining: string[] = [];
+
+  next(items: MediaItem[], current: string | null): MediaItem | null {
+    if (!items.length) { this.catalog = ''; this.remaining = []; return null; }
+    const ids = [...new Set(items.map(item => item.id))];
+    const catalog = [...ids].sort().join('\n');
+    const changed = catalog !== this.catalog;
+    if (changed || !this.remaining.length) {
+      this.catalog = catalog;
+      this.remaining = changed && current && ids.length > 1 ? ids.filter(id => id !== current) : [...ids];
+      for (let i = this.remaining.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [this.remaining[i], this.remaining[j]] = [this.remaining[j], this.remaining[i]];
+      }
+      if (this.remaining.length > 1 && this.remaining.at(-1) === current) {
+        [this.remaining[0], this.remaining[this.remaining.length - 1]] = [this.remaining[this.remaining.length - 1], this.remaining[0]];
+      }
+    }
+    const id = this.remaining.pop();
+    return items.find(item => item.id === id) || null;
+  }
+}
+
 export function isWithinSchedule(settings: Settings, date = new Date()): boolean {
   if (!settings.scheduleEnabled) return true;
   const toMinutes = (value: string) => Number(value.slice(0, 2)) * 60 + Number(value.slice(3));

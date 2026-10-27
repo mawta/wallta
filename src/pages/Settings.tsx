@@ -3,7 +3,7 @@ import { callNative, isNative } from '../lib/native';
 import { SectionTitle, SettingRow, Toggle } from '../components/ui';
 import type { AppState, Capabilities } from '../lib/types';
 
-export function SettingsPage({ state, capabilities, onSave, busy, perform, notify }: { state: AppState; capabilities: Capabilities | null; onSave: (state: AppState) => Promise<void>; busy: boolean; perform: (fn: () => Promise<void>) => Promise<void>; notify: (text: string, error?: boolean) => void }) {
+export function SettingsPage({ state, capabilities, onSave, busy, perform, notify }: { state: AppState; capabilities: Capabilities | null; onSave: (state: AppState) => Promise<unknown>; busy: boolean; perform: (fn: () => Promise<void>) => Promise<unknown>; notify: (text: string, error?: boolean) => void }) {
   const update = (settings: Partial<AppState['settings']>) => void onSave({ ...state, settings: { ...state.settings, ...settings } });
   return <>
     <SectionTitle eyebrow="NHẸ NHÀNG, THEO Ý BẠN" title="Cài đặt" description="Wallta chăm chút màn hình. Bạn tận hưởng khung cảnh." />

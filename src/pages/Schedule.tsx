@@ -4,7 +4,7 @@ import { defaultSettings, type Capabilities, type Settings } from '../lib/types'
 import { clampSettings } from '../lib/rules';
 import { SectionTitle, SettingRow, Toggle, intervalLabel } from '../components/ui';
 
-export function Schedule({ settings, capabilities, onSave, busy }: { settings: Settings; capabilities: Capabilities | null; onSave: (settings: Settings) => Promise<void>; busy: boolean }) {
+export function Schedule({ settings, capabilities, onSave, busy }: { settings: Settings; capabilities: Capabilities | null; onSave: (settings: Settings) => Promise<unknown>; busy: boolean }) {
   const [draft, setDraft] = useState(settings);
   const [error, setError] = useState('');
   const settingsKey = JSON.stringify(settings);

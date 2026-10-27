@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { clampSettings, isWithinSchedule, parseManifest, selectNext, validateSource } from './rules';
+import { clampSettings, isWithinSchedule, parseManifest, selectNext, ShuffleCycle, validateSource } from './rules';
 import { defaultSettings, type MediaItem } from './types';
 
 describe('rotation rules', () => {
@@ -15,6 +15,21 @@ describe('rotation rules', () => {
     expect(selectNext(images, 'c', 'sequential')?.id).toBe('a');
     expect(selectNext(images, 'b', 'sequential')?.id).toBe('c');
     expect(selectNext([], null, 'shuffle')).toBeNull();
+  });
+  it('uses every image once per shuffle cycle and reconciles removed images', () => {
+    const cycle = new ShuffleCycle();
+    let current: string | null = null;
+    for (let round = 0; round < 4; round++) {
+      const ids: string[] = [];
+      for (let i = 0; i < images.length; i++) {
+        const next: MediaItem = cycle.next(images, current)!;
+        expect(next.id).not.toBe(current);
+        ids.push(next.id); current = next.id;
+      }
+      expect(new Set(ids).size).toBe(images.length);
+    }
+    expect(cycle.next([images[0]], current)?.id).toBe('a');
+    expect(cycle.next([], 'a')).toBeNull();
   });
   it('uses the previous selected day for an overnight window after midnight', () => {
     const settings = { ...defaultSettings, scheduleEnabled: true, days: [1], startTime: '22:00', endTime: '06:00' };
