@@ -27,6 +27,10 @@ pub struct GoogleStatus {
     location: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     source_kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    account: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    selection_name: Option<String>,
 }
 struct Session {
     status: Mutex<GoogleStatus>,
@@ -41,7 +45,7 @@ static CREDENTIAL_EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::Atomi
 fn sessions() -> &'static Mutex<HashMap<String, Arc<Session>>> {
     SESSIONS.get_or_init(|| Mutex::new(HashMap::new()))
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct Credential {
     client_id: String,
     client_secret: String,
@@ -97,7 +101,7 @@ fn callback_code(request: &str, state: &str) -> Result<String, String> {
         .cloned()
         .ok_or("Google did not return an authorization code.".into())
 }
-fn read_json(request: reqwest::blocking::RequestBuilder) -> Result<Value, String> {
+pub(crate) fn read_json(request: reqwest::blocking::RequestBuilder) -> Result<Value, String> {
     let bytes = providers::bounded_response(
         request
             .send()
@@ -233,21 +237,16 @@ pub async fn google_cancel(
             .remove(&source_id);
         if let Some(session) = session {
             session.cancelled.store(true, Ordering::SeqCst);
-            let saved = engine
-                .snapshot()?
-                .sources
-                .iter()
-                .any(|source| source.id == source_id);
+            let saved = engine.snapshot()?;
             let _guard = CREDENTIAL_LOCK.lock().map_err(|e| e.to_string())?;
-            if discard_imports && !saved {
+            if discard_imports {
                 if let Some(directory) = session
                     .import_directory
                     .lock()
                     .map_err(|e| e.to_string())?
                     .as_ref()
                 {
-                    if directory.parent() == Some(engine.store.root.join("google-import").as_path())
-                    {
+                    if can_discard_import(&engine.store.root, directory, &saved.sources) {
                         let _ = std::fs::remove_dir_all(directory);
                     }
                 }
@@ -301,6 +300,134 @@ pub fn authorize_source(source: &Source) -> Result<Source, String> {
     }
     Ok(resolved)
 }
+
+/// A connected Drive source can be kept disabled while its folder is chosen later.
+pub(crate) fn validate_source_location(source: &Source) -> Result<(), String> {
+    let pending_drive = source.kind == "drive"
+        && !source.enabled
+        && source
+            .google
+            .as_ref()
+            .is_some_and(|connection| connection.provider == "drive" && connection.connected);
+    if source.name.trim().is_empty() || (source.location.trim().is_empty() && !pending_drive) {
+        return Err("Every source needs a name and location.".into());
+    }
+    Ok(())
+}
+
+pub(crate) struct DriveAccess {
+    pub access_token: String,
+    pub account: Option<String>,
+    session: Option<Arc<Session>>,
+}
+impl DriveAccess {
+    pub fn ensure_active(&self) -> Result<(), String> {
+        if self
+            .session
+            .as_ref()
+            .is_some_and(|session| session.cancelled.load(Ordering::SeqCst))
+        {
+            return Err("Google connection cancelled.".into());
+        }
+        Ok(())
+    }
+    pub fn selected(&self, id: &str, name: &str) -> Result<(), String> {
+        self.ensure_active()?;
+        if let Some(session) = &self.session {
+            let mut status = session.status.lock().map_err(|e| e.to_string())?;
+            self.ensure_active()?;
+            status.location = Some(id.into());
+            status.selection_name = Some(name.into());
+        }
+        Ok(())
+    }
+}
+
+pub(crate) fn drive_access(engine: &Engine, source_id: &str) -> Result<DriveAccess, String> {
+    let session = sessions()
+        .lock()
+        .map_err(|e| e.to_string())?
+        .get(source_id)
+        .cloned();
+    if let Some(session) = session {
+        let status = session.status.lock().map_err(|e| e.to_string())?.clone();
+        if status.phase == "ready" && status.source_kind.as_deref() == Some("drive") {
+            let credential = session
+                .credential
+                .lock()
+                .map_err(|e| e.to_string())?
+                .clone();
+            if let Some(credential) = credential {
+                if credential.expires_at > chrono::Utc::now().timestamp() {
+                    let access = DriveAccess {
+                        access_token: credential.access_token,
+                        account: status.account,
+                        session: Some(session),
+                    };
+                    access.ensure_active()?;
+                    return Ok(access);
+                }
+            }
+        }
+    }
+    let source = engine
+        .snapshot()?
+        .sources
+        .into_iter()
+        .find(|source| source.id == source_id && source.kind == "drive")
+        .ok_or("Kết nối Google Drive trước khi chọn thư mục.")?;
+    let account = source
+        .google
+        .as_ref()
+        .and_then(|connection| connection.account.clone());
+    let resolved = authorize_source(&source)?;
+    let access_token = resolved
+        .access_token
+        .filter(|token| !token.is_empty())
+        .ok_or("Không tìm thấy quyền Google Drive đã lưu. Kết nối lại nguồn ảnh.")?;
+    Ok(DriveAccess {
+        access_token,
+        account,
+        session: None,
+    })
+}
+
+fn account_name(value: &Value, email_field: &str, name_field: &str) -> Option<String> {
+    [email_field, name_field]
+        .iter()
+        .filter_map(|field| value[*field].as_str())
+        .find(|value| !value.trim().is_empty() && value.len() <= 512)
+        .map(str::to_owned)
+}
+
+fn google_account(
+    client: &reqwest::blocking::Client,
+    access_token: &str,
+    drive: bool,
+) -> Option<String> {
+    if drive {
+        let about = read_json(
+            client
+                .get("https://www.googleapis.com/drive/v3/about")
+                .bearer_auth(access_token)
+                .timeout(Duration::from_secs(5))
+                .query(&[("fields", "user(displayName,emailAddress)")]),
+        )
+        .ok()?;
+        account_name(&about["user"], "emailAddress", "displayName")
+    } else {
+        // Use only identity already granted; Photos Picker does not require extra profile scopes.
+        let profile = read_json(
+            client
+                .get("https://www.googleapis.com/oauth2/v3/userinfo")
+                .bearer_auth(access_token)
+                .timeout(Duration::from_secs(5)),
+        )
+        .ok()?;
+        account_name(&profile, "email", "name")
+    }
+}
+
 fn connect(
     session: Arc<Session>,
     source_id: String,
@@ -393,6 +520,8 @@ fn connect(
     ]))?;
     let credential = credential_from_token(&token, client_id, client_secret)?;
     check_cancel(&session, deadline)?;
+    let account = google_account(&client, &credential.access_token, kind == "drive");
+    check_cancel(&session, deadline)?;
     if kind == "drive" {
         let _guard = CREDENTIAL_LOCK.lock().map_err(|e| e.to_string())?;
         check_cancel(&session, deadline)?;
@@ -402,8 +531,9 @@ fn connect(
             GoogleStatus {
                 phase: "ready".into(),
                 poll_interval_seconds: 2,
-                message: "Đã cấp quyền Google Drive. Nhập thư mục và lưu nguồn ảnh.".into(),
+                message: "Đã kết nối Google Drive. Chọn thư mục ảnh trong Wallta.".into(),
                 source_kind: Some("drive".into()),
+                account,
                 ..Default::default()
             },
         );
@@ -428,6 +558,7 @@ fn connect(
         &source_id,
         &root,
         deadline,
+        account,
     );
     let _ = client
         .delete(format!(
@@ -441,6 +572,20 @@ fn connect(
 fn urlencoding_segment(value: &str) -> String {
     url::form_urlencoded::byte_serialize(value.as_bytes()).collect()
 }
+fn import_directory(root: &std::path::Path, source_id: &str) -> PathBuf {
+    root.join("google-import")
+        .join(format!("{source_id}-{}", random_string(24)))
+}
+fn can_discard_import(
+    root: &std::path::Path,
+    directory: &std::path::Path,
+    sources: &[Source],
+) -> bool {
+    directory.parent() == Some(root.join("google-import").as_path())
+        && !sources
+            .iter()
+            .any(|source| std::path::Path::new(&source.location) == directory)
+}
 fn import_picker(
     client: &reqwest::blocking::Client,
     session: &Session,
@@ -450,6 +595,7 @@ fn import_picker(
     source_id: &str,
     root: &std::path::Path,
     deadline: Instant,
+    account: Option<String>,
 ) -> Result<(), String> {
     let picker_url = picker["pickerUri"]
         .as_str()
@@ -492,7 +638,7 @@ fn import_picker(
             ..Default::default()
         },
     );
-    let directory = root.join("google-import").join(source_id);
+    let directory = import_directory(root, source_id);
     *session.import_directory.lock().map_err(|e| e.to_string())? = Some(directory.clone());
     std::fs::create_dir_all(&directory).map_err(|e| e.to_string())?;
     let mut page = String::new();
@@ -591,6 +737,7 @@ fn import_picker(
             message: format!("Đã nhập {count} ảnh Google Photos vào thiết bị."),
             location: Some(directory.to_string_lossy().into_owned()),
             source_kind: Some("local".into()),
+            account,
             ..Default::default()
         },
     );
@@ -688,6 +835,41 @@ pub async fn google_disconnect(source_id: String) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn account_display_name_is_used_when_email_is_unavailable() {
+        assert_eq!(
+            account_name(
+                &json!({"emailAddress":"", "displayName":"Wallta User"}),
+                "emailAddress",
+                "displayName"
+            )
+            .as_deref(),
+            Some("Wallta User")
+        );
+        assert!(account_name(&json!({}), "emailAddress", "displayName").is_none());
+    }
+    #[test]
+    fn photos_reselection_uses_a_new_import_directory() {
+        let root = std::path::Path::new("test-root");
+        let first = import_directory(root, "source");
+        let second = import_directory(root, "source");
+        assert_ne!(first, second);
+        assert_eq!(first.parent(), Some(root.join("google-import").as_path()));
+        assert_eq!(second.parent(), first.parent());
+    }
+    #[test]
+    fn canceling_photos_reselection_preserves_the_saved_import() {
+        let root = std::path::Path::new("test-root");
+        let saved = root.join("google-import").join("saved");
+        let pending = root.join("google-import").join("pending");
+        let source: Source = serde_json::from_value(json!({
+            "id":"source", "name":"Photos", "kind":"local", "location":saved
+        }))
+        .unwrap();
+        assert!(!can_discard_import(root, &saved, &[source.clone()]));
+        assert!(can_discard_import(root, &pending, &[source]));
+        assert!(!can_discard_import(root, &root.join("outside"), &[]));
+    }
     #[test]
     fn pkce_uses_rfc7636_s256_vector() {
         assert_eq!(

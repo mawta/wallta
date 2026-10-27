@@ -109,6 +109,7 @@ impl Engine {
             password: None,
             api_key: None,
             access_token: None,
+            google: None,
         });
         self.store.save(&next)?;
         self.revision.fetch_add(1, Ordering::SeqCst);
@@ -525,9 +526,7 @@ impl Engine {
             {
                 return Err("Unknown source type.".into());
             }
-            if source.name.trim().is_empty() || source.location.trim().is_empty() {
-                return Err("Every source needs a name and location.".into());
-            }
+            crate::google::validate_source_location(source)?;
             if ["url", "manifest", "webdav"].contains(&source.kind.as_str()) {
                 providers::network_url(&source.location)?;
             }
@@ -569,6 +568,32 @@ impl Engine {
 #[cfg(test)]
 mod update_install_tests {
     use super::*;
+
+    #[test]
+    fn disabled_connected_drive_can_be_saved_before_folder_selection_and_after_restart() {
+        let root = tempfile::tempdir().unwrap();
+        let make_engine = || {
+            Engine::new(Store::new(root.path().into(), root.path().join("cache")).unwrap()).unwrap()
+        };
+        let engine = make_engine();
+        let mut state = AppState::default();
+        state.sources.push(
+            serde_json::from_value(serde_json::json!({
+                "id":"drive", "name":"Drive", "kind":"drive", "location":"", "enabled":false,
+                "google":{"provider":"drive", "connected":true}
+            }))
+            .unwrap(),
+        );
+        assert!(engine.save_state(state).is_ok());
+        let reopened = make_engine();
+        assert!(reopened.save_state(reopened.snapshot().unwrap()).is_ok());
+        let mut enabled = reopened.snapshot().unwrap();
+        enabled.sources[0].enabled = true;
+        assert!(reopened.save_state(enabled).is_err());
+        let mut disconnected = reopened.snapshot().unwrap();
+        disconnected.sources[0].google.as_mut().unwrap().connected = false;
+        assert!(reopened.save_state(disconnected).is_err());
+    }
 
     #[test]
     fn installing_preserves_saved_state_and_rejects_mutations_until_failure() {

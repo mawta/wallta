@@ -19,6 +19,20 @@ pub struct Source {
     pub api_key: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub access_token: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub google: Option<GoogleConnection>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GoogleConnection {
+    pub provider: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selection_name: Option<String>,
+    #[serde(default)]
+    pub connected: bool,
 }
 fn yes() -> bool {
     true
@@ -131,4 +145,35 @@ pub struct Capabilities {
     pub screensaver: bool,
     pub min_interval_seconds: u64,
     pub notes: Vec<&'static str>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn legacy_sources_without_google_metadata_still_load() {
+        let source: Source = serde_json::from_value(json!({
+            "id":"legacy", "name":"Drive", "kind":"drive", "location":"folder"
+        }))
+        .unwrap();
+        assert!(serde_json::to_value(source)
+            .unwrap()
+            .get("google")
+            .is_none());
+    }
+
+    #[test]
+    fn google_connection_survives_state_round_trip() {
+        let metadata = json!({"provider":"drive", "account":"wallta@example.com", "selectionName":"Wallpapers", "connected":true});
+        let state: AppState = serde_json::from_value(json!({"sources":[{
+            "id":"drive", "name":"Drive", "kind":"drive", "location":"folder", "google":metadata
+        }]}))
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(state).unwrap()["sources"][0]["google"],
+            metadata
+        );
+    }
 }

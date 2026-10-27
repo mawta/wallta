@@ -1,5 +1,6 @@
 mod commands;
 pub mod google;
+mod google_drive;
 mod lan_commands;
 pub mod models;
 pub mod providers;
@@ -128,6 +129,8 @@ pub fn run() {
             google::google_poll,
             google::google_cancel,
             google::google_disconnect,
+            google_drive::google_drive_folders,
+            google_drive::google_drive_select,
             updates::update_status,
             updates::update_check,
             updates::update_download,
