@@ -65,6 +65,13 @@ class StateStore(private val context: Context) {
             val previous = (0 until old.length()).map { old.getJSONObject(it) }.find { it.optString("id") == source.getString("id") }
             secretKeys.forEach { k -> if (!source.has(k) && previous?.optString("kind") == source.optString("kind") && previous.has(k)) source.put(k, previous.get(k)) }
         }
+        // Invalidate before publishing the new configuration. A cached recursive listing
+        // or cached authenticated image must not survive a provider credential edit.
+        for (i in 0 until old.length()) {
+            val previous = old.getJSONObject(i); val id = previous.getString("id")
+            val next = (0 until sources.length()).map { sources.getJSONObject(it) }.find { it.optString("id") == id }
+            if (next == null || MediaSafety.sourceConfig(previous) != MediaSafety.sourceConfig(next)) invalidateOwnedCache(root, id)
+        }
         val settings = incoming.getJSONObject("settings")
         settings.put("intervalSeconds", settings.optLong("intervalSeconds", 900).coerceIn(900, 604800))
         settings.put("slideshowSeconds", settings.optInt("slideshowSeconds", 30).coerceIn(5, 86400))
@@ -82,14 +89,7 @@ class StateStore(private val context: Context) {
                 if (type == "relay") {
                     val active = root.optJSONObject("relay:$id")
                     if (active?.optString("nonce") != pending.optString("nonce") || active?.optString("relayUrl") != pending.optString("relayUrl")) {
-                        val ledger = root.optJSONObject("cacheOwners") ?: JSONObject()
-                        ledger.keys().asSequence().toList().filter { ledger.getJSONObject(it).optString("source") == id && it.matches(Regex("[a-f0-9]{64}")) }.forEach { mediaId ->
-                            File(File(context.cacheDir, "media"), "$mediaId.img").delete()
-                            File(File(context.cacheDir, "visual"), "$mediaId.jpg").delete()
-                            ledger.remove(mediaId)
-                        }
-                        root.put("cacheOwners", ledger); root.remove("catalog:$id")
-                        root.put("cacheEpoch", JSONObject().put("value", (root.optJSONObject("cacheEpoch")?.optLong("value") ?: 0L) + 1))
+                        invalidateOwnedCache(root, id)
                     }
                 }
                 pending.put("pending", false); root.put("$type:$id", pending); root.remove("${type}Pending:$id")
@@ -97,6 +97,17 @@ class StateStore(private val context: Context) {
         }
         write(root)
         this.state(true)
+    }
+    /** Runs only under lock against the same root that save() will commit. Grants stay intact. */
+    private fun invalidateOwnedCache(root: JSONObject, sourceId: String) {
+        val ledger = root.optJSONObject("cacheOwners") ?: JSONObject()
+        ledger.keys().asSequence().toList().filter { ledger.getJSONObject(it).optString("source") == sourceId && it.matches(Regex("[a-f0-9]{64}")) }.forEach { mediaId ->
+            File(File(context.cacheDir, "media"), "$mediaId.img").delete()
+            File(File(context.cacheDir, "visual"), "$mediaId.jpg").delete()
+            ledger.remove(mediaId)
+        }
+        root.put("cacheOwners", ledger); root.remove("catalog:$sourceId")
+        root.put("cacheEpoch", JSONObject().put("value", (root.optJSONObject("cacheEpoch")?.optLong("value") ?: 0L) + 1))
     }
     fun revision(): Long = synchronized(lock) { read().optLong("revision") }
     fun invalidateCache() = synchronized(lock) {

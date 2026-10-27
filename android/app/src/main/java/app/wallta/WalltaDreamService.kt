@@ -1,59 +1,163 @@
 package app.wallta
 
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Color
+import android.graphics.drawable.BitmapDrawable
 import android.os.Handler
 import android.os.Looper
 import android.service.dreams.DreamService
-import android.webkit.WebView
+import android.view.Gravity
+import android.view.View
+import android.widget.FrameLayout
+import android.widget.ImageView
+import android.widget.TextView
 import org.json.JSONObject
+import java.text.DateFormat
+import java.util.Date
 import java.util.concurrent.Executors
 import java.util.concurrent.Future
 
+/** Native renderer: the background screensaver never creates a WebView or React UI. */
 class WalltaDreamService : DreamService() {
     private val handler = Handler(Looper.getMainLooper())
-    private var web: WebView? = null
+    private val lifecycle = Any()
     private var io = Executors.newSingleThreadExecutor()
     private var work: Future<*>? = null
     private val requestTag = "dream:${java.util.UUID.randomUUID()}"
     @Volatile private var active = false
-    override fun onAttachedToWindow() {
-        super.onAttachedToWindow(); isInteractive = false; isFullscreen = true; isScreenBright = true
-        web = TrustedWebView.create(this).also { setContentView(it) }
-        web?.loadDataWithBaseURL("${TrustedWebView.origin}/dream.html", """<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#000}#bg{position:absolute;inset:-5%;background:center/cover;filter:blur(28px) brightness(.55)}#image{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}#clock{position:absolute;right:5vw;bottom:5vh;color:white;font:4vw sans-serif;text-shadow:0 2px 6px #000}#message{position:absolute;left:6%;bottom:8%;color:white;font:24px sans-serif} </style></head><body><div id="bg"></div><img id="image"><div id="clock"></div><div id="message">Wallta · Loading photos…</div><script>window.show=function(url,fit,blur,clock){document.getElementById('image').src=url;document.getElementById('image').style.objectFit=fit==='fit'?'contain':fit==='stretch'?'fill':'cover';document.getElementById('bg').style.backgroundImage=blur?'url("'+url+'")':'none';document.getElementById('clock').style.display=clock?'block':'none';document.getElementById('message').textContent=''};window.fail=function(text){document.getElementById('image').removeAttribute('src');document.getElementById('bg').style.backgroundImage='none';document.getElementById('message').textContent=text};setInterval(function(){document.getElementById('clock').textContent=new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})},1000)</script></body></html>""", "text/html", "UTF-8", null)
+    @Volatile private var generation = 0L
+    private var image: ImageView? = null
+    private var background: ImageView? = null
+    private var clock: TextView? = null
+    private var message: TextView? = null
+    private var visible: DreamFrame? = null
+    private var visibleSettings = JSONObject()
+    private var visiblePhotos = false
+    private var visibleRevision = -1L
+    // Frames posted from I/O are tracked so removing callbacks at stop cannot leak them.
+    private val pending = mutableSetOf<DreamFrame>()
+
+    private class DreamFrame(val image: Bitmap, val background: Bitmap?) {
+        fun recycle() { background?.takeIf { it !== image }?.recycle(); image.recycle() }
     }
-    override fun onDreamingStarted() { super.onDreamingStarted(); active = true; if (io.isShutdown) io = Executors.newSingleThreadExecutor(); handler.postDelayed(slide, 400) }
+
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow()
+        isInteractive = false; isFullscreen = true; isScreenBright = true
+        val root = FrameLayout(this).apply { setBackgroundColor(Color.BLACK) }
+        val full = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
+        background = ImageView(this).apply { scaleType = ImageView.ScaleType.CENTER_CROP; imageAlpha = 150; visibility = View.GONE }
+        image = ImageView(this).apply { scaleType = ImageView.ScaleType.CENTER_CROP }
+        root.addView(background, full); root.addView(image, FrameLayout.LayoutParams(full))
+        val inset = (32 * resources.displayMetrics.density).toInt()
+        clock = TextView(this).apply { setTextColor(Color.WHITE); textSize = 42f; setShadowLayer(5f, 0f, 2f, Color.BLACK); visibility = View.GONE }
+        message = TextView(this).apply { setTextColor(Color.WHITE); textSize = 24f; text = "Wallta · Loading photos…"; setShadowLayer(4f, 0f, 2f, Color.BLACK) }
+        root.addView(clock, FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM or Gravity.END).apply { setMargins(inset, inset, inset, inset) })
+        root.addView(message, FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM or Gravity.START).apply { setMargins(inset, inset, inset, inset) })
+        setContentView(root)
+    }
+
+    override fun onDreamingStarted() {
+        super.onDreamingStarted()
+        synchronized(lifecycle) { generation++; active = true }
+        if (io.isShutdown) io = Executors.newSingleThreadExecutor()
+        handler.post(clockTick); handler.post(slide)
+    }
+
+    private val clockTick = object : Runnable {
+        override fun run() {
+            if (!active) return
+            clock?.text = DateFormat.getTimeInstance(DateFormat.SHORT).format(Date())
+            // Ambient content must disappear when offline, even between slide changes.
+            if (visiblePhotos && (!MediaRepository(applicationContext).networkAllowed(visibleSettings) || StateStore(applicationContext).revision() != visibleRevision)) showError("Google Photos source changed or is offline")
+            handler.postDelayed(this, 1000)
+        }
+    }
+
     private val slide = object : Runnable {
         override fun run() {
             if (!active) return
+            val session = generation
             work = io.submit {
                 val store = StateStore(applicationContext)
                 val snapshot = synchronized(StateStore.lock) { store.state().getJSONObject("settings") to store.revision() }
                 val settings = snapshot.first; val revision = snapshot.second
-                fun ensureCurrent() { check(active && !Thread.currentThread().isInterrupted && store.revision() == revision) { "Screensaver operation cancelled" } }
+                fun ensureCurrent() { check(active && generation == session && !Thread.currentThread().isInterrupted && store.revision() == revision) { "Screensaver operation cancelled" } }
                 try {
                     check(WallpaperEngine.allowed(settings)) { "Wallta is outside the configured schedule" }
                     val repo = MediaRepository(applicationContext, store)
-                    val pair = Net.scoped(requestTag) {
-                        val items = repo.list()
-                        val loaded = Rotation.loadUsable(store, items, settings, "dreamRotation", ::ensureCurrent) { candidate -> repo.visual(candidate) }
-                        items to loaded.first
+                    var items = emptyList<Media>()
+                    val loaded = Net.scoped(requestTag) {
+                        items = repo.list()
+                        Rotation.loadUsable(store, items, settings, "dreamRotation", ::ensureCurrent, discard = { frame: DreamFrame -> frame.recycle() }) { candidate ->
+                            val file = repo.visual(candidate)
+                            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }; BitmapFactory.decodeFile(file.path, bounds)
+                            check(bounds.outWidth in 1..2048 && bounds.outHeight in 1..2048) { "Screensaver preview exceeds decode limits" }
+                            val bitmap = BitmapFactory.decodeFile(file.path) ?: error("Cannot decode screensaver preview")
+                            try {
+                                val blurred = if (settings.optBoolean("blurBackground") && settings.optString("fit") == "fit") {
+                                    val longest = maxOf(bitmap.width, bitmap.height)
+                                    Bitmap.createScaledBitmap(bitmap, maxOf(1, bitmap.width * 24 / longest), maxOf(1, bitmap.height * 24 / longest), true)
+                                } else null
+                                DreamFrame(bitmap, blurred)
+                            } catch (e: Exception) { bitmap.recycle(); throw e }
+                        }
                     }
-                    val items = pair.first; val media = pair.second
-                    if (!active || Thread.currentThread().isInterrupted) return@submit
-                    val url = "${TrustedWebView.origin}/media/${media.id}.img"
-                    handler.post {
-                        synchronized(StateStore.lock) {
-                            if (active && store.revision() == revision) {
-                                web?.evaluateJavascript("window.show&&window.show(${JSONObject.quote(url)},${JSONObject.quote(settings.optString("fit"))},${settings.optBoolean("blurBackground")},${settings.optBoolean("showClock")})", null)
-                                Rotation.consumed(store, items, media, "dreamRotation")
+                    val media = loaded.first; val frame = loaded.second
+                    synchronized(lifecycle) {
+                        if (!active || generation != session || Thread.currentThread().isInterrupted) frame.recycle()
+                        else {
+                            pending += frame
+                            handler.post {
+                                synchronized(lifecycle) publish@{
+                                    if (!pending.remove(frame)) return@publish
+                                    if (!active || generation != session || image == null) { frame.recycle(); return@publish }
+                                    synchronized(StateStore.lock) commit@{
+                                        if (store.revision() != revision || (media.photos && !repo.networkAllowed(settings))) { frame.recycle(); return@commit }
+                                        showFrame(frame, settings, media.photos, revision)
+                                        runCatching { Rotation.consumed(store, items, media, "dreamRotation") }.onFailure { message?.text = "Could not save screensaver rotation state" }
+                                    }
+                                }
                             }
                         }
                     }
-                } catch (e: Exception) { handler.post { if (active) web?.evaluateJavascript("window.fail&&window.fail(${JSONObject.quote(e.message ?: "Add an image source in Wallta")})", null) } }
-                finally { if (active) handler.postDelayed(this, settings.optLong("slideshowSeconds", 30).coerceIn(5, 86400) * 1000) }
+                } catch (e: Exception) {
+                    synchronized(lifecycle) {
+                        if (active && generation == session && !Thread.currentThread().isInterrupted) handler.post { if (active && generation == session) showError(e.message ?: "Add an image source in Wallta") }
+                    }
+                } finally {
+                    synchronized(lifecycle) { if (active && generation == session) handler.postDelayed(this, settings.optLong("slideshowSeconds", 30).coerceIn(5, 86400) * 1000) }
+                }
             }
         }
     }
-    private fun stop() { active = false; handler.removeCallbacksAndMessages(null); work?.cancel(true); Net.cancel(requestTag); work = null; io.shutdownNow(); web?.stopLoading() }
+
+    /** UI thread owns every published frame and releases the previous one after detaching it. */
+    private fun showFrame(frame: DreamFrame, settings: JSONObject, photos: Boolean, revision: Long) {
+        val previous = visible
+        image?.scaleType = when (settings.optString("fit")) { "fit" -> ImageView.ScaleType.FIT_CENTER; "stretch" -> ImageView.ScaleType.FIT_XY; else -> ImageView.ScaleType.CENTER_CROP }
+        image?.setImageDrawable(BitmapDrawable(resources, frame.image).apply { isFilterBitmap = true })
+        background?.setImageDrawable(frame.background?.let { BitmapDrawable(resources, it).apply { isFilterBitmap = true } })
+        background?.visibility = if (frame.background == null) View.GONE else View.VISIBLE
+        clock?.visibility = if (settings.optBoolean("showClock")) View.VISIBLE else View.GONE
+        message?.text = ""
+        visible = frame; visibleSettings = settings; visiblePhotos = photos; visibleRevision = revision
+        previous?.recycle()
+    }
+    private fun clearFrame() {
+        image?.setImageDrawable(null); background?.setImageDrawable(null); background?.visibility = View.GONE
+        visible?.recycle(); visible = null; visiblePhotos = false; clock?.visibility = View.GONE
+    }
+    private fun showError(text: String) { clearFrame(); message?.text = text }
+    private fun stop() {
+        synchronized(lifecycle) {
+            active = false; generation++
+            handler.removeCallbacksAndMessages(null); work?.cancel(true); Net.cancel(requestTag); work = null; io.shutdownNow()
+            pending.forEach { it.recycle() }; pending.clear()
+            clearFrame()
+        }
+    }
     override fun onDreamingStopped() { stop(); super.onDreamingStopped() }
-    override fun onDetachedFromWindow() { stop(); web?.destroy(); web = null; super.onDetachedFromWindow() }
+    override fun onDetachedFromWindow() { stop(); image = null; background = null; clock = null; message = null; super.onDetachedFromWindow() }
 }
