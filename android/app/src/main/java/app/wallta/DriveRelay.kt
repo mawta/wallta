@@ -24,10 +24,15 @@ class DriveRelay(private val store: StateStore) {
         cancel(id)
         val j = store.beginPending("relay", id, JSONObject().put("phase", "starting").put("relayUrl", relay).put("folder", folder))
         val data = Net.json("$relay/api/pair", method = "POST", body = JSONObject().put("folderId", folder).put("displayName", args.optString("displayName", "Wallta TV")), tag = j.getString("nonce"))
-        val verification = data.getString("verificationUrl"); require(verification.startsWith("https://") && Policy.http(verification)) { "Relay returned an unsafe verification URL" }
-        j.put("phase", "authorizing").put("deviceCode", data.getString("deviceCode")).put("verificationUrl", verification)
-            .put("interval", data.optInt("pollIntervalSeconds", 5).coerceAtLeast(5)).put("nextPoll", System.currentTimeMillis() + data.optInt("pollIntervalSeconds", 5).coerceAtLeast(5) * 1000)
-        store.saveSession("relay", id, j); return public(j)
+        j.put("deviceCode", data.optString("deviceCode"))
+        try {
+            require(j.getString("deviceCode").isNotBlank()) { "Relay returned no pairing code" }
+            val verification = data.getString("verificationUrl"); require(verification.startsWith("https://") && Policy.http(verification)) { "Relay returned an unsafe verification URL" }
+            j.put("phase", "authorizing").put("verificationUrl", verification)
+                .put("interval", data.optInt("pollIntervalSeconds", 5).coerceAtLeast(5)).put("nextPoll", System.currentTimeMillis() + data.optInt("pollIntervalSeconds", 5).coerceAtLeast(5) * 1000)
+        }
+        catch (e: Exception) { cleanupPending(j); throw e }
+        return persistOrCleanup(id, j)
     }
     private fun public(j: JSONObject) = JSONObject().put("phase", j.optString("phase")).put("verificationUrl", j.optString("verificationUrl")).put("pollIntervalSeconds", j.optInt("interval", 5)).put("message", j.optString("message")).apply {
         if (j.optString("phase") == "ready") { put("location", j.getString("folder")); put("sourceKind", "drive") }
@@ -38,12 +43,12 @@ class DriveRelay(private val store: StateStore) {
         j.put("nextPoll", System.currentTimeMillis() + j.optInt("interval", 5) * 1000); store.saveSession("relay", id, j)
         val data = Net.json("${j.getString("relayUrl")}/api/pair/poll", method = "POST", body = JSONObject().put("deviceCode", j.getString("deviceCode")), tag = j.getString("nonce"))
         when (data.optString("phase")) {
-            "ready" -> { require(data.optString("token").isNotBlank()) { "Relay returned no connection capability" }; j.put("phase", "ready").put("token", data.getString("token")).put("folder", folder(data.optString("location", j.getString("folder")))); j.remove("deviceCode") }
+            "ready" -> { require(data.optString("token").isNotBlank()) { "Relay returned no connection capability" }; j.put("phase", "ready").put("token", data.getString("token")).put("folder", folder(data.optString("location", j.getString("folder")))) }
             "error" -> j.put("phase", "error").put("message", data.optString("message", "Drive sign-in expired. Start again."))
             "authorizing" -> Unit
             else -> error("Unexpected relay response")
         }
-        store.saveSession("relay", id, j); return public(j)
+        return persistOrCleanup(id, j)
     }
     fun disconnect(id: String) {
         cancel(id)
@@ -53,6 +58,25 @@ class DriveRelay(private val store: StateStore) {
     fun cancel(id: String) {
         val j = store.takePending("relay", id) ?: return
         Net.cancel(j.optString("nonce"))
-        if (j.optString("token").isNotBlank()) Net.cleanup { Net.bytes("${j.getString("relayUrl")}/api/connection", 1024 * 1024, mapOf("Authorization" to "Bearer ${j.getString("token")}"), "DELETE") }
+        cleanupPending(j)
+    }
+    private fun cleanupPending(j: JSONObject) {
+        Net.cleanup {
+            val relay = j.getString("relayUrl")
+            val cancelled = if (j.optString("deviceCode").isNotBlank()) runCatching {
+                Net.bytes("$relay/api/pair", 1024 * 1024, method = "DELETE", body = JSONObject().put("deviceCode", j.getString("deviceCode")).toString())
+            }.isSuccess else false
+            if (!cancelled && j.optString("token").isNotBlank()) Net.bytes("$relay/api/connection", 1024 * 1024, mapOf("Authorization" to "Bearer ${j.getString("token")}"), "DELETE")
+        }
+    }
+    private fun persistOrCleanup(id: String, value: JSONObject): JSONObject {
+        try { store.saveSession("relay", id, value) }
+        catch (e: Exception) {
+            val committed = session(id, true)
+            // A concurrent poll may finish after the same nonce was explicitly saved.
+            if (committed?.optString("nonce") == value.optString("nonce")) return public(committed)
+            cleanupPending(value); throw e
+        }
+        return public(value)
     }
 }

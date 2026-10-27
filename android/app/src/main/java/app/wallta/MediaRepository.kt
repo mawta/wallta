@@ -22,12 +22,25 @@ class MediaRepository(private val context: Context, private val store: StateStor
         return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) && (!settings.optBoolean("wifiOnly") || caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI))
     }
     fun list(force: Boolean = false): List<Media> {
-        val state = store.state(); val settings = state.getJSONObject("settings"); val sources = state.getJSONArray("sources")
+        // A single generation owns the entire list operation, including later sources.
+        val snapshot = synchronized(StateStore.lock) { Triple(store.state(), store.revision(), store.get("cacheEpoch")?.optLong("value") ?: 0L) }
+        val state = snapshot.first; val revision = snapshot.second; val epoch = snapshot.third
+        val settings = state.getJSONObject("settings"); val sources = state.getJSONArray("sources")
+        fun ensureCurrent(source: JSONObject? = null) = synchronized(StateStore.lock) {
+            check(store.revision() == revision && (store.get("cacheEpoch")?.optLong("value") ?: 0L) == epoch && !Thread.currentThread().isInterrupted) { "Catalog operation cancelled by newer state or source removal" }
+            if (source != null) {
+                val saved = store.state().getJSONArray("sources")
+                val current = (0 until saved.length()).map { saved.getJSONObject(it) }.find { it.optString("id") == source.getString("id") }
+                val fields = listOf("id", "name", "kind", "location", "recursive", "enabled", "username", "password", "apiKey", "accessToken")
+                check(current != null && fields.all { current.opt(it) == source.opt(it) }) { "Catalog source was removed or edited" }
+            }
+        }
         val result = mutableListOf<Media>(); val errors = mutableListOf<String>()
         for (i in 0 until sources.length()) {
+            ensureCurrent()
             val s = sources.getJSONObject(i); if (!s.optBoolean("enabled", true)) continue
+            ensureCurrent(s)
             val id = s.getString("id"); val key = "catalog:$id"; val cached = store.get(key)
-            val revision = store.revision(); val epoch = store.get("cacheEpoch")?.optLong("value") ?: 0L
             val existing = cached?.optJSONArray("items")?.let { a -> (0 until a.length()).map { Media.from(a.getJSONObject(it)) } } ?: emptyList()
             val online = networkAllowed(settings)
             if (s.getString("kind") != "local" && !online) {
@@ -48,16 +61,19 @@ class MediaRepository(private val context: Context, private val store: StateStor
                 }
                 val a = JSONArray(); items.forEach { a.put(it.json()) }
                 synchronized(StateStore.lock) {
-                    check(store.revision() == revision && (store.get("cacheEpoch")?.optLong("value") ?: 0L) == epoch && !Thread.currentThread().isInterrupted) { "Catalog operation cancelled by newer state or source removal" }
+                    ensureCurrent(s)
                     store.put(key, JSONObject().put("time", System.currentTimeMillis()).put("items", a))
                 }
                 result += items
             } catch (e: Exception) {
+                // An invalidated operation must never continue with its stale later sources.
+                ensureCurrent(s)
                 if (s.getString("kind") != "photos") result += existing.filter { cacheFile(it.id).exists() }
                 else if ((e as? ApiError)?.status in listOf(401, 403, 404)) { clearSource(id); store.put(key, null) }
                 errors += "${s.optString("name")}: ${e.message}"
             }
         }
+        ensureCurrent()
         if (result.isEmpty() && errors.isNotEmpty()) error(errors.joinToString("; "))
         return result.distinctBy { it.id }.take(10000)
     }
