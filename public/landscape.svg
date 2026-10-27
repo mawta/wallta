@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1000" viewBox="0 0 1600 1000">
+ <defs>
+  <linearGradient id="sky" x2=".8" y2="1"><stop stop-color="#a7c5bd"/><stop offset=".48" stop-color="#ddc8ab"/><stop offset="1" stop-color="#dca98a"/></linearGradient>
+  <linearGradient id="haze" x2="0" y2="1"><stop stop-color="#b9beb0"/><stop offset="1" stop-color="#98a8a2"/></linearGradient>
+  <linearGradient id="mount" x2=".5" y2="1"><stop stop-color="#698983"/><stop offset="1" stop-color="#345b58"/></linearGradient>
+  <linearGradient id="front" x2="1" y2="1"><stop stop-color="#254b49"/><stop offset="1" stop-color="#102c2f"/></linearGradient>
+  <radialGradient id="sun"><stop stop-color="#fff2d2" stop-opacity=".7"/><stop offset="1" stop-color="#fff2d2" stop-opacity="0"/></radialGradient>
+  <filter id="grain"><feTurbulence type="fractalNoise" baseFrequency=".6" numOctaves="3" stitchTiles="stitch"/><feColorMatrix type="saturate" values="0"/><feComponentTransfer><feFuncA type="linear" slope=".055"/></feComponentTransfer><feBlend in="SourceGraphic" mode="soft-light"/></filter>
+ </defs>
+ <g filter="url(#grain)">
+ <path fill="url(#sky)" d="M0 0h1600v1000H0z"/>
+ <ellipse cx="1100" cy="300" rx="510" ry="380" fill="url(#sun)"/>
+ <circle cx="1080" cy="292" r="57" fill="#f9e4bd"/>
+ <path fill="#a9b4aa" d="m0 613 115-118 128 67 159-200 130 90 123-51 126 136 151-135 115 105 142-82 311 185v390H0z"/>
+ <path fill="url(#haze)" d="m0 698 243-127 98 22 163-123 234 205 91-31 180-151 179 147 163-49 249 115v294H0z"/>
+ <path fill="url(#mount)" d="m0 753 144-50 178 51 173-44 224-214 116 117 142 39 148 145 163 13 132-46 180 96v240H0z"/>
+ <path fill="#64857f" opacity=".6" d="m496 710 223-214-11 180-85 2-37 69-27-25z"/>
+ <path fill="url(#front)" d="m0 727 117 39 67-24 125 82 71 7 146 110 154-26 105 85h815v-159l-90 29-98-54-156 63-96-39-107 77-75-10-69 49-82-26-67 21-96-58-108 5-47-45-117-31-58-45-126-2L0 794z"/>
+ </g>
+</svg>
