@@ -262,3 +262,114 @@ fn orphaned_legacy_cache_is_purged_and_eviction_prunes_ownership() {
     prune_cache_owners(&mut runtime, cache.path());
     assert!(runtime.cache_owners.is_empty());
 }
+
+fn webdav_http_fixture(recursive: bool) -> (Vec<wallta_lib::models::MediaItem>, Vec<String>) {
+    use std::{
+        io::{Read, Write},
+        net::TcpListener,
+        sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc, Mutex,
+        },
+        thread,
+        time::Duration,
+    };
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let location = format!("http://{}/photos", listener.local_addr().unwrap());
+    let stopped = Arc::new(AtomicBool::new(false));
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let server_stopped = stopped.clone();
+    let server_requests = requests.clone();
+    let server = thread::spawn(move || {
+        while !server_stopped.load(Ordering::SeqCst) {
+            let (mut socket, _) = match listener.accept() {
+                Ok(connection) => connection,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(5));
+                    continue;
+                }
+                Err(error) => panic!("Fixture could not accept request: {error}"),
+            };
+            socket
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut request = Vec::new();
+            let mut byte = [0];
+            while !request.ends_with(b"\r\n\r\n") {
+                socket.read_exact(&mut byte).unwrap();
+                request.push(byte[0]);
+                assert!(request.len() < 16384);
+            }
+            let headers = String::from_utf8(request).unwrap();
+            let length = headers
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("Content-Length")
+                        .then(|| value.trim().parse::<usize>().unwrap())
+                })
+                .unwrap_or(0);
+            socket.read_exact(&mut vec![0; length]).unwrap();
+            let mut first_line = headers.lines().next().unwrap().split_whitespace();
+            assert_eq!(first_line.next(), Some("PROPFIND"));
+            let path = first_line.next().unwrap().to_owned();
+            assert!(headers
+                .lines()
+                .any(|line| line.eq_ignore_ascii_case("Depth: 1")));
+            server_requests.lock().unwrap().push(path.clone());
+            let entries = match path.as_str() {
+                "/photos/" => {
+                    r#"<d:response><d:href>/photos/</d:href><d:propstat><d:prop><d:resourcetype><d:collection/></d:resourcetype></d:prop></d:propstat></d:response>
+<d:response><d:href>/photos/root.jpg</d:href></d:response>
+<d:response><d:href>/photos/sub</d:href><d:propstat><d:prop><d:resourcetype><d:collection/></d:resourcetype></d:prop></d:propstat></d:response>
+<d:response><d:href>sub/</d:href><d:propstat><d:prop><d:resourcetype><d:collection/></d:resourcetype></d:prop></d:propstat></d:response>
+<d:response><d:href>http://evil.test/photos/stolen/</d:href><d:propstat><d:prop><d:resourcetype><d:collection/></d:resourcetype></d:prop></d:propstat></d:response>
+<d:response><d:href>/photos-sibling/</d:href><d:propstat><d:prop><d:resourcetype><d:collection/></d:resourcetype></d:prop></d:propstat></d:response>"#
+                }
+                "/photos/sub/" => {
+                    r#"<d:response><d:href>/photos/sub/</d:href><d:propstat><d:prop><d:resourcetype><d:collection/></d:resourcetype></d:prop></d:propstat></d:response>
+<d:response><d:href>/photos/</d:href><d:propstat><d:prop><d:resourcetype><d:collection/></d:resourcetype></d:prop></d:propstat></d:response>
+<d:response><d:href>/photos/sub/nested.png</d:href><d:propstat><d:prop><d:getcontenttype>image/png</d:getcontenttype></d:prop></d:propstat></d:response>"#
+                }
+                unexpected => {
+                    panic!("Fixture requested a duplicate or out-of-root folder: {unexpected}")
+                }
+            };
+            let body = format!(
+                r#"<?xml version="1.0"?><d:multistatus xmlns:d="DAV:">{entries}</d:multistatus>"#
+            );
+            write!(socket, "HTTP/1.1 207 Multi-Status\r\nContent-Length: {}\r\nContent-Type: application/xml\r\nConnection: close\r\n\r\n{}", body.len(), body).unwrap();
+        }
+    });
+    let source = serde_json::from_value(serde_json::json!({
+        "id":"dav", "name":"DAV", "kind":"webdav", "location":location, "recursive":recursive, "enabled":true
+    })).unwrap();
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .unwrap();
+    let result = wallta_lib::providers::list_source(&client, &source);
+    stopped.store(true, Ordering::SeqCst);
+    server.join().unwrap();
+    let paths = requests.lock().unwrap().clone();
+    (result.unwrap(), paths)
+}
+
+#[test]
+fn webdav_recursive_http_listing_includes_nested_images_once() {
+    let (items, paths) = webdav_http_fixture(true);
+    assert_eq!(items.len(), 2, "Recursive WebDAV omitted the nested image");
+    assert!(items
+        .iter()
+        .any(|item| item.url.ends_with("/photos/sub/nested.png")));
+    assert_eq!(paths, vec!["/photos/", "/photos/sub/"]);
+}
+
+#[test]
+fn webdav_nonrecursive_http_listing_requests_only_root() {
+    let (items, paths) = webdav_http_fixture(false);
+    assert_eq!(items.len(), 1);
+    assert!(items[0].url.ends_with("/photos/root.jpg"));
+    assert_eq!(paths, vec!["/photos/"]);
+}
