@@ -460,6 +460,9 @@ impl Engine {
             wallpaper::set_autostart(state.settings.autostart)?;
         }
         self.store.save(&state)?;
+        for source in &state.sources {
+            crate::google::commit_connection(&source.id)?;
+        }
         for old in &runtime.state.sources {
             if !state.sources.iter().any(|s| s.id == old.id) {
                 self.store.forget(old)?;

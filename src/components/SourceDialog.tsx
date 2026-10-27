@@ -7,13 +7,15 @@ import { sourceLabels, type Source, type SourceKind } from '../lib/types';
 import { SourceIcon } from './ui';
 import { GoogleConnect } from './GoogleConnect';
 
-interface Props { initial?: Source; initialKind?: SourceKind; onSave: (source: Source) => Promise<void>; onClose: () => void; busy: boolean }
+interface Props { initial?: Source; initialKind?: SourceKind; onSave: (source: Source) => Promise<boolean>; onClose: () => void; busy: boolean }
 export function SourceDialog({ initial, initialKind = 'local', onSave, onClose, busy }: Props) {
   const dialog = useRef<HTMLDialogElement>(null);
   const picker = useRef<HTMLInputElement>(null);
   const [source, setSource] = useState<Source>(() => initial || { id: uuid(), name: '', kind: initialKind, location: '', recursive: true, enabled: true });
   const [error, setError] = useState('');
   const [picking, setPicking] = useState(false);
+  const submitted = useRef(false);
+  useEffect(() => () => { if (isNative()) void callNative('google_cancel', { sourceId: source.id, discardImports: !submitted.current }).catch(() => {}); }, [source.id]);
   useEffect(() => { const element = dialog.current; element?.showModal(); return () => element?.close(); }, []);
   const update = (value: Partial<Source>) => setSource(previous => ({ ...previous, ...value }));
   const chooseFolder = async () => {
@@ -29,7 +31,8 @@ export function SourceDialog({ initial, initialKind = 'local', onSave, onClose, 
     event.preventDefault();
     const validation = validateSource(source);
     if (validation) { setError(validation); return; }
-    await onSave({ ...source, name: source.name.trim(), location: source.location.trim() });
+    submitted.current = true;
+    if (!await onSave({ ...source, name: source.name.trim(), location: source.location.trim() })) submitted.current = false;
   };
   const kinds: SourceKind[] = ['local', 'manifest', 'drive', 'photos'];
   return <dialog ref={dialog} className="source-dialog" onCancel={onClose} aria-labelledby="source-dialog-title">

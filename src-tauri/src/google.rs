@@ -31,6 +31,9 @@ pub struct GoogleStatus {
 struct Session {
     status: Mutex<GoogleStatus>,
     cancelled: AtomicBool,
+    credential: Mutex<Option<Credential>>,
+    import_directory: Mutex<Option<PathBuf>>,
+    started: Instant,
 }
 static SESSIONS: OnceLock<Mutex<HashMap<String, Arc<Session>>>> = OnceLock::new();
 static CREDENTIAL_LOCK: Mutex<()> = Mutex::new(());
@@ -195,6 +198,66 @@ pub fn disconnect(id: &str) -> Result<(), String> {
         Ok(())
     }
 }
+pub fn commit_connection(id: &str) -> Result<(), String> {
+    let pending = sessions()
+        .lock()
+        .map_err(|e| e.to_string())?
+        .get(id)
+        .cloned();
+    if let Some(session) = pending {
+        let _guard = CREDENTIAL_LOCK.lock().map_err(|e| e.to_string())?;
+        if !session.cancelled.load(Ordering::SeqCst) {
+            if let Some(credential) = session
+                .credential
+                .lock()
+                .map_err(|e| e.to_string())?
+                .as_ref()
+            {
+                save_credential(id, credential)?;
+            }
+        }
+    }
+    Ok(())
+}
+#[tauri::command]
+pub async fn google_cancel(
+    source_id: String,
+    discard_imports: bool,
+    engine: tauri::State<'_, Arc<Engine>>,
+) -> Result<(), String> {
+    let engine = engine.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let session = sessions()
+            .lock()
+            .map_err(|e| e.to_string())?
+            .remove(&source_id);
+        if let Some(session) = session {
+            session.cancelled.store(true, Ordering::SeqCst);
+            let saved = engine
+                .snapshot()?
+                .sources
+                .iter()
+                .any(|source| source.id == source_id);
+            let _guard = CREDENTIAL_LOCK.lock().map_err(|e| e.to_string())?;
+            if discard_imports && !saved {
+                if let Some(directory) = session
+                    .import_directory
+                    .lock()
+                    .map_err(|e| e.to_string())?
+                    .as_ref()
+                {
+                    if directory.parent() == Some(engine.store.root.join("google-import").as_path())
+                    {
+                        let _ = std::fs::remove_dir_all(directory);
+                    }
+                }
+            }
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
 pub fn authorize_source(source: &Source) -> Result<Source, String> {
     let mut resolved = source.clone();
     if source.kind != "drive" {
@@ -304,8 +367,12 @@ fn connect(
                 };
                 let response=format!("HTTP/1.1 {}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Security-Policy: default-src 'none'\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",if success {"200 OK"}else{"400 Bad Request"},body.len(),body);
                 let _ = stream.write_all(response.as_bytes());
-                if let Ok(code) = parsed {
-                    break code;
+                match parsed {
+                    Ok(code) => break code,
+                    Err(error) if error == "Google authorization was declined." => {
+                        return Err(error)
+                    }
+                    Err(_) => (),
                 }
             }
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
@@ -328,7 +395,7 @@ fn connect(
     if kind == "drive" {
         let _guard = CREDENTIAL_LOCK.lock().map_err(|e| e.to_string())?;
         check_cancel(&session, deadline)?;
-        save_credential(&source_id, &credential)?;
+        *session.credential.lock().map_err(|e| e.to_string())? = Some(credential);
         set_status(
             &session,
             GoogleStatus {
@@ -425,6 +492,7 @@ fn import_picker(
         },
     );
     let directory = root.join("google-import").join(source_id);
+    *session.import_directory.lock().map_err(|e| e.to_string())? = Some(directory.clone());
     std::fs::create_dir_all(&directory).map_err(|e| e.to_string())?;
     let mut page = String::new();
     let mut count = 0;
@@ -495,7 +563,11 @@ fn import_picker(
                 "{:x}",
                 Sha256::digest(media["id"].as_str().unwrap_or(base).as_bytes())
             );
-            storage::atomic_write(&directory.join(format!("{id}.{extension}")), &bytes)?;
+            {
+                let _guard = CREDENTIAL_LOCK.lock().map_err(|e| e.to_string())?;
+                check_cancel(session, deadline)?;
+                storage::atomic_write(&directory.join(format!("{id}.{extension}")), &bytes)?;
+            }
             count += 1;
         }
         let next = response["nextPageToken"].as_str().unwrap_or("");
@@ -551,9 +623,19 @@ pub async fn google_begin(
     let session = Arc::new(Session {
         status: Mutex::new(initial.clone()),
         cancelled: AtomicBool::new(false),
+        credential: Mutex::new(None),
+        import_directory: Mutex::new(None),
+        started: Instant::now(),
     });
     {
         let mut all = sessions().lock().map_err(|e| e.to_string())?;
+        all.retain(|_, session| {
+            let keep = session.started.elapsed() < Duration::from_secs(1800);
+            if !keep {
+                session.cancelled.store(true, Ordering::SeqCst);
+            }
+            keep
+        });
         if all.len() >= 32 && !all.contains_key(&source_id) {
             return Err("Có quá nhiều kết nối đang chờ. Khởi động lại Wallta rồi thử lại.".into());
         }

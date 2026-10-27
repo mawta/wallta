@@ -29,6 +29,7 @@ export default function App() {
   const saveSource = async (source: Source) => {
     const saved = await save({ ...state, sources: state.sources.some(item => item.id === source.id) ? state.sources.map(item => item.id === source.id ? source : item) : [...state.sources, source] }, 'Đã lưu nguồn ảnh.');
     if (saved) setDialog(null);
+    return saved;
   };
   const sourceCards = (limit?: number) => state.sources.slice(0, limit).map(source => <article className={`source-card ${!source.enabled ? 'disabled-source' : ''}`} key={source.id}>
     <div className={`source-icon ${source.kind}`}><SourceIcon kind={source.kind} size={24} /></div>

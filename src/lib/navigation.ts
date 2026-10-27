@@ -17,9 +17,11 @@ export function installDirectionalNavigation(): () => void {
   const handler = (event: KeyboardEvent) => {
     if (!['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(event.key) || event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return;
     const active = document.activeElement as HTMLElement | null;
-    if (active?.matches('input,select,textarea,[contenteditable=true]') || active?.closest('.slideshow')) return;
+    if (active?.closest('.slideshow')) return;
+    if (active?.matches('input,textarea,[contenteditable=true]') && ['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
+    if (active?.matches('select') && ['ArrowUp', 'ArrowDown'].includes(event.key)) return;
     const scope = document.querySelector('dialog[open], [role=dialog]') || document;
-    const controls = Array.from(scope.querySelectorAll<HTMLElement>('button:not(:disabled),a[href],input:not(:disabled),select:not(:disabled),textarea:not(:disabled),[tabindex="0"]')).filter(element => element.getClientRects().length > 0 && !element.closest('[inert]'));
+    const controls = Array.from(scope.querySelectorAll<HTMLElement>('button:not(:disabled),a[href],input:not(:disabled),select:not(:disabled),textarea:not(:disabled),summary,[tabindex="0"]')).filter(element => element.getClientRects().length > 0 && !element.closest('[inert]'));
     const center = (element: HTMLElement) => { const rect = element.getBoundingClientRect(); return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 }; };
     const target = active && controls.includes(active) ? nearestInDirection(center(active), controls.map(center), event.key) : 0;
     if (target >= 0 && controls[target]) { event.preventDefault(); controls[target].focus(); controls[target].scrollIntoView({ block: 'nearest', inline: 'nearest' }); }

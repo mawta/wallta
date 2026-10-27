@@ -106,6 +106,7 @@ pub fn run() {
             commands::open_external,
             google::google_begin,
             google::google_poll,
+            google::google_cancel,
             google::google_disconnect
         ])
         .run(tauri::generate_context!())
