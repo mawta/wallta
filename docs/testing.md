@@ -1,6 +1,17 @@
-# Kiểm chứng Wallta 0.1
+# Kiểm chứng Wallta
 
-Đối chiếu mã nguồn và bằng chứng thực thi; CI build không thay thế kiểm tra trên thiết bị. Đây là bản thử nghiệm có bộ cài Windows chưa ký chứng thư và APK ký debug.
+Đối chiếu mã nguồn và bằng chứng thực thi; CI build không thay thế kiểm tra trên thiết bị. Windows chưa ký Authenticode; APK từ 0.1.2 dùng khóa phát hành cố định.
+
+## Bổ sung trong 0.1.2
+
+| Phạm vi | Kết quả |
+|---|---|
+| React/TypeScript | 33 tests và production build đạt; tải/cài riêng, tiến độ, hủy, lỗi, quyền cài, không kiểm tra khi trang bị ẩn |
+| Windows | 57 Rust tests và NSIS build đạt; chữ ký cập nhật có ràng buộc phiên bản, giới hạn tải, throttle và chờ lưu dữ liệu trước khi cài |
+| Android | 76 tests trên Linux đạt, không bỏ qua; API 26/28 kiểm tra APK identity/signer, FileProvider, quyền cài, hủy và handoff; APK ký phát hành đạt |
+| Phát hành | 12 tests công cụ đạt; tải lại năm asset công khai, xác minh checksum/chữ ký, manifest latest không cần đăng nhập |
+
+[Commit, CI và checksum 0.1.2](artifacts.md). Chưa chạy nâng cấp thực trên Windows/điện thoại/TV; cần kiểm tra quyền cài, hủy trình cài, giữ dữ liệu và khởi động lại trên thiết bị.
 
 ## Bổ sung trong 0.1.1
 
