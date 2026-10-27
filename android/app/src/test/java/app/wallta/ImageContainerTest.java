@@ -38,6 +38,22 @@ public class ImageContainerTest {
   }
 
   @Test
+  public void pngAllowsUnusedPaddingInTheFinalIdatChunk() throws Exception {
+    byte[] png = png();
+    int length = ByteBuffer.wrap(png, 33, 4).getInt();
+    ByteArrayOutputStream out = new ByteArrayOutputStream();
+    out.write(png, 0, 41 + length);
+    out.write(new byte[] {7, 8, 9});
+    out.write(png, 41 + length, png.length - 41 - length);
+    byte[] padded = out.toByteArray();
+    ByteBuffer.wrap(padded, 33, 4).putInt(length + 3);
+    CRC32 crc = new CRC32();
+    crc.update(padded, 37, length + 7);
+    ByteBuffer.wrap(padded, 44 + length, 4).putInt((int) crc.getValue());
+    validate(padded, "image/png");
+  }
+
+  @Test
   public void pngRejectsBrokenCompressedPixelsEvenWithValidChunkCrc() throws Exception {
     byte[] png = png();
     // This fixture's IDAT starts at byte 37; payload starts at byte 41.

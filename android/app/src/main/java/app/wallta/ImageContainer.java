@@ -62,8 +62,9 @@ final class ImageContainer {
         int count = (int) Math.min(left, buffer.length);
         in.readFully(buffer, 0, count);
         crc.update(buffer, 0, count);
-        if (name.equals("IDAT")) {
-          if (pixelsStream.finished()) throw new IOException("Extra PNG pixel data");
+        // PNG decoders ignore unused padding after the final zlib stream (PNG 11.2.3).
+        // Still consume all chunk bytes and verify their CRC.
+        if (name.equals("IDAT") && !pixelsStream.finished()) {
           pixelsStream.setInput(buffer, 0, count);
           try {
             while (!pixelsStream.needsInput() && !pixelsStream.finished()) {
@@ -75,8 +76,6 @@ final class ImageContainer {
               if (produced == 0 && !pixelsStream.needsInput() && !pixelsStream.finished())
                 throw new IOException("Invalid PNG compressed stream");
             }
-            if (pixelsStream.finished() && pixelsStream.getRemaining() != 0)
-              throw new IOException("Extra PNG compressed data");
           } catch (DataFormatException e) {
             throw new IOException("Invalid PNG compressed pixels", e);
           }
