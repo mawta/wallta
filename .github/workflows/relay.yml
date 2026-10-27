@@ -1,0 +1,23 @@
+name: Drive relay
+on:
+  push:
+    branches: [main, feat/first-release]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  php:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: relay
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: mbstring, openssl, curl, pdo_sqlite
+          coverage: none
+      - run: composer install --no-interaction --prefer-dist
+      - run: vendor/bin/phpunit
