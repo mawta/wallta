@@ -17,8 +17,9 @@ const nav: { page: Page; label: string; Icon: LucideIcon }[] = [{ page: 'overvie
 
 export default function App() {
   const wallta = useWallta();
-  const { state, capabilities, media, busy, loaded, notice, save, next, toggle, refresh, perform, notify } = wallta;
+  const { state, capabilities, media, busy: operationBusy, loaded, notice, save, next, toggle, refresh, perform, notify } = wallta;
   const updates = useUpdates(loaded);
+  const busy = operationBusy || updates.status.phase === 'installing';
   const [page, setPage] = useState<Page>('overview');
   const [dialog, setDialog] = useState<{ initial?: Source; kind?: SourceKind } | null>(null);
   const [slideshow, setSlideshow] = useState(false);

@@ -16,6 +16,7 @@ class WalltaBridge(private val activity: MainActivity, private val web: WebView)
     private val control = Executors.newSingleThreadExecutor()
     private val store = StateStore(activity.applicationContext)
     private val lan = LanTransfer(activity.applicationContext, store)
+    private val updater = AndroidUpdater(activity, store)
     private val authorizationIds = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
     @Volatile private var closed = false
     fun receive(message: String) {
@@ -24,7 +25,7 @@ class WalltaBridge(private val activity: MainActivity, private val web: WebView)
         val id = request.optString("id"); if (id.length !in 1..128) return
         val command = request.optString("command"); val args = request.optJSONObject("args") ?: JSONObject()
         if (command == "pick_folder") { activity.runOnUiThread { activity.pickFolder { uri, error -> reply(id, error == null, error ?: uri) } }; return }
-        val executor = if (command in listOf("get_state", "save_state", "set_running", "get_capabilities", "google_cancel", "lan_start", "lan_status", "lan_stop", "lan_accept")) control else io
+        val executor = if (command in listOf("get_state", "save_state", "set_running", "get_capabilities", "google_cancel", "lan_start", "lan_status", "lan_stop", "lan_accept", "update_status", "update_check", "update_download", "update_cancel", "update_install")) control else io
         executor.execute {
             try {
                 val repo = MediaRepository(activity.applicationContext, store)
@@ -36,6 +37,11 @@ class WalltaBridge(private val activity: MainActivity, private val web: WebView)
                     "get_preview" -> { val mediaId = args.getString("id"); val media = repo.list().find { it.id == mediaId } ?: error("Image no longer available"); repo.visual(media); "${TrustedWebView.origin}/media/${media.id}.img" }
                     "next_wallpaper" -> try { WallpaperEngine.apply(activity, true) } catch (e: Exception) { store.mutateState { it.put("error", e.message ?: "Wallpaper update failed") }; throw e }
                     "get_capabilities" -> capabilities()
+                    "update_status" -> updater.status()
+                    "update_check" -> updater.check(args.optBoolean("automatic", false))
+                    "update_download" -> updater.download()
+                    "update_cancel" -> updater.cancel()
+                    "update_install" -> updater.install()
                     "lan_start" -> lan.start(args.getJSONArray("mediaIds"))
                     "lan_status" -> lan.status()
                     "lan_stop" -> lan.stop()
@@ -67,5 +73,6 @@ class WalltaBridge(private val activity: MainActivity, private val web: WebView)
         val json = when (value) { null, JSONObject.NULL -> "null"; is JSONObject, is JSONArray -> value.toString(); is Number, is Boolean -> value.toString(); else -> JSONObject.quote(value.toString()) }
         activity.runOnUiThread { if (!closed) web.evaluateJavascript("window.__walltaReply&&window.__walltaReply(${JSONObject.quote(id)},$success,$json)", null) }
     }
-    fun close() { closed = true; lan.close(); authorizationIds.forEach { GoogleAmbient(activity, store).cancel(it) }; runCatching { MediaRepository(activity.applicationContext, store).releaseUnusedGrants() }; io.shutdownNow(); control.shutdownNow() }
+    fun installerResult(success: Boolean) { updater.installerResult(success) }
+    fun close() { closed = true; updater.close(); lan.close(); authorizationIds.forEach { GoogleAmbient(activity, store).cancel(it) }; runCatching { MediaRepository(activity.applicationContext, store).releaseUnusedGrants() }; io.shutdownNow(); control.shutdownNow() }
 }

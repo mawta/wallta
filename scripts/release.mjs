@@ -140,10 +140,17 @@ export async function publishRelease({root,dir,tag,run = gh}) {
   const releases = JSON.parse(run(['api',`repos/${repository}/releases?per_page=100`,'--paginate','--slurp'])).flat();
   requireValue(!releases.some(release=>release.tag_name === tag),'Release already exists; assets will never be overwritten');
   const version = validateTag(tag).split('.').map(BigInt);
+  const candidate = await readJson(join(dir,'latest.json'));
   for (const prior of releases.filter(item=>!item.draft && !item.prerelease && /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(item.tag_name))) {
     const previous = validateTag(prior.tag_name).split('.').map(BigInt);
     const firstDifference = version.findIndex((part,index)=>part !== previous[index]);
     requireValue(firstDifference >= 0 && version[firstDifference] > previous[firstDifference],'A newer stable release already exists');
+    const manifests = (prior.assets ?? []).filter(asset=>asset.name === 'latest.json');
+    requireValue(manifests.length === 1 && Number.isSafeInteger(manifests[0].id) && manifests[0].id > 0,'Cannot verify previous Android versionCode: release manifest missing');
+    const previousManifest = JSON.parse(run(['api',`repos/${repository}/releases/assets/${manifests[0].id}`,'-H','Accept: application/octet-stream']));
+    const previousCode = previousManifest.android?.versionCode;
+    requireValue(previousManifest.version === prior.tag_name.slice(1) && Number.isSafeInteger(previousCode) && previousCode > 0,'Cannot verify previous Android versionCode: invalid release manifest');
+    requireValue(candidate.android.versionCode > previousCode,'Android versionCode must increase for every stable release');
   }
   const notesPath = join(dir,'..',`wallta-release-notes-${validateTag(tag)}.txt`);
   await writeFile(notesPath,releaseNotes+'\n');

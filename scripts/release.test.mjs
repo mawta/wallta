@@ -102,7 +102,8 @@ test('publishes only after exact draft inventory and downloaded contents pass ve
   await release.generateRelease({root:f.root,dir:f.dir,tag:'v0.1.2'});
   let published = false;
   const run = args => {
-    if (args[0] === 'api') return '[[]]';
+    if (args[0] === 'api' && args[1].includes('releases?')) return '[[{"tag_name":"v0.1.1","draft":false,"prerelease":false,"assets":[{"name":"latest.json","id":123}]}]]';
+    if (args[0] === 'api' && args[1].endsWith('/assets/123')) return JSON.stringify({version:'0.1.1',android:{versionCode:2}});
     if (args[1] === 'view') return JSON.stringify({isDraft:true,isPrerelease:false,tagName:'v0.1.2',assets:readdirSync(f.dir).map(name=>({name,size:statSync(join(f.dir,name)).size}))});
     if (args[1] === 'download') for (const name of readdirSync(f.dir)) copyFileSync(join(f.dir,name),join(args[args.indexOf('--dir')+1],name));
     if (args[1] === 'edit') published = true;
@@ -135,6 +136,20 @@ test('refuses to make an older stable version latest', async t => {
     mutated = true; throw new Error('unexpected mutation');
   }}),/newer stable/i);
   assert.equal(mutated,false);
+});
+
+test('refuses an Android versionCode that cannot upgrade the previous stable APK', async t => {
+  const f = await fixture(t);
+  await release.generateRelease({root:f.root,dir:f.dir,tag:'v0.1.2'});
+  for (const code of [3,4]) {
+    let mutated = false;
+    await assert.rejects(release.publishRelease({root:f.root,dir:f.dir,tag:'v0.1.2',run:args=>{
+      if (args[0] === 'api' && args[1].includes('releases?')) return '[[{"tag_name":"v0.1.1","draft":false,"prerelease":false,"assets":[{"name":"latest.json","id":123}]}]]';
+      if (args[0] === 'api' && args[1].endsWith('/assets/123')) return JSON.stringify({version:'0.1.1',android:{versionCode:code}});
+      mutated = true; throw new Error('unexpected mutation');
+    }}),/versionCode/i);
+    assert.equal(mutated,false);
+  }
 });
 test('leaves a draft unpublished when downloaded bytes differ', async t => {
   const f = await fixture(t);

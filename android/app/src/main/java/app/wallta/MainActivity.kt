@@ -56,6 +56,10 @@ class MainActivity : Activity() {
     @Deprecated("Android activity result API")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == AndroidUpdater.INSTALL_REQUEST) {
+            bridge?.installerResult(resultCode == RESULT_OK)
+            return
+        }
         if (requestCode == 42) {
             val reply = photoReply; photoReply = null; photoSourceId = null
             if (resultCode != RESULT_OK || data == null) reply?.completeExceptionally(IllegalStateException("Photo selection cancelled"))
