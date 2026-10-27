@@ -51,4 +51,4 @@ Android đổi hình nền tĩnh theo lịch tối thiểu **15 phút**, có th�
 
 Android cần WebView đủ mới để hỗ trợ bridge theo origin; TV có WebView quá cũ sẽ hiển thị hướng dẫn cập nhật. Không cài launcher thay thế. Windows cần tiến trình Wallta còn chạy trong khay; Quit dừng bộ lập lịch.
 
-[Ma trận kiểm chứng](docs/testing.md) ghi rõ kết quả tự động và các ca cần thiết bị/credential thật. [Thiết kế](docs/superpowers/specs/2026-10-27-wallta-design.md) và [kế hoạch](docs/superpowers/plans/2026-10-27-wallta-implementation.md) lưu các quyết định kỹ thuật.
+[Ma trận kiểm chứng](docs/testing.md) ghi rõ kết quả tự động và các ca cần thiết bị/credential thật.

@@ -19,3 +19,7 @@ Thumbs.db
 .playwright-cli/
 output/
 src-tauri/gen/schemas/
+docs/superpowers/
+.local/
+AGENTS.md
+CLAUDE.md
