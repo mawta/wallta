@@ -16,3 +16,6 @@ local.properties
 *.exe
 .DS_Store
 Thumbs.db
+.playwright-cli/
+output/
+src-tauri/gen/schemas/
