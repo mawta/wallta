@@ -43,6 +43,13 @@ public class AndroidUpdaterTest {
     private UpdatePolicy.Release release() {
         return new UpdatePolicy.Release("0.1.2", "", "", "", 4, 3);
     }
+    private void attachUpdateProvider(Activity activity) {
+        android.content.pm.ProviderInfo provider = activity.getPackageManager().resolveContentProvider(
+            activity.getPackageName() + ".updates", PackageManager.GET_META_DATA);
+        assertNotNull("Update provider must be declared in the app manifest", provider);
+        // Each Robolectric test has a new dataDir; attachment clears FileProvider's static roots cache.
+        new FileProvider().attachInfo(activity, provider);
+    }
     @Test public void refusesWrongPackageVersionCodeAndSigningCertificate() throws Exception {
         PackageInfo current = info("app.wallta", "0.1.1", 2, "stable-key");
         AndroidUpdater.requireIdentity(current, info("app.wallta", "0.1.2", 3, "stable-key"), release());
@@ -50,8 +57,9 @@ public class AndroidUpdaterTest {
             assertThrows(IllegalArgumentException.class, () -> AndroidUpdater.requireIdentity(current, candidate, release()));
     }
     @Test public void providerSharesOnlyUpdateCache() throws Exception {
-        org.junit.Assume.assumeTrue("AndroidX FileProvider uses Android slash semantics", File.separatorChar == '/');
         Activity activity = Robolectric.buildActivity(Activity.class).setup().get();
+        attachUpdateProvider(activity);
+        org.junit.Assume.assumeTrue("AndroidX FileProvider uses Android slash semantics", File.separatorChar == '/');
         File updates = new File(activity.getCacheDir(), "updates"); updates.mkdirs();
         File apk = new File(updates, "verified.apk"); apk.createNewFile();
         Uri uri = FileProvider.getUriForFile(activity, "app.wallta.updates", apk);
@@ -113,8 +121,9 @@ public class AndroidUpdaterTest {
         try (AndroidUpdater updater = new AndroidUpdater(activity, new StateStore(activity))) { assertEquals(123456L, updater.lastAttempt()); }
     }
     @Test public void grantedPermissionStartsInstallerForResultWithoutFinishingWallta() throws Exception {
-        org.junit.Assume.assumeTrue("AndroidX FileProvider uses Android slash semantics", File.separatorChar == '/');
         InstallerActivity activity = Robolectric.buildActivity(InstallerActivity.class).setup().get();
+        attachUpdateProvider(activity);
+        org.junit.Assume.assumeTrue("AndroidX FileProvider uses Android slash semantics", File.separatorChar == '/');
         Shadows.shadowOf(activity.getPackageManager()).setCanRequestPackageInstalls(true);
         AtomicReference<String> result = new AtomicReference<>();
         try (AndroidUpdater updater = new AndroidUpdater(activity, new StateStore(activity))) {
