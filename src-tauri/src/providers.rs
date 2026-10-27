@@ -131,16 +131,75 @@ pub fn parse_manifest(text: &str, base: &str, source: &str) -> Result<Vec<MediaI
         .collect()
 }
 
+fn webdav_folder(mut url: Url) -> Url {
+    if !url.path().ends_with('/') {
+        url.set_path(&format!("{}/", url.path()));
+    }
+    url.set_query(None);
+    url.set_fragment(None);
+    url
+}
+fn webdav_root(source: &Source) -> Result<Url, String> {
+    let url = network_url(&source.location)?;
+    if (source.password.is_some() || source.username.is_some()) && url.scheme() != "https" {
+        return Err("WebDAV credentials require HTTPS.".into());
+    }
+    Ok(webdav_folder(url))
+}
+fn within_webdav_root(url: &Url, root: &Url) -> bool {
+    let path = url.path().to_ascii_lowercase();
+    network_url(url.as_str()).is_ok()
+        && url.origin() == root.origin()
+        && url.path().starts_with(root.path())
+        // An encoded separator must not turn an apparently safe path into a
+        // different hierarchy after a WebDAV server decodes it.
+        && !path.contains("%2f") && !path.contains("%5c")
+}
+fn webdav_client(root: &Url) -> Result<Client, String> {
+    let root = root.clone();
+    Client::builder()
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(30))
+        .redirect(reqwest::redirect::Policy::custom(move |attempt| {
+            if attempt.previous().len() >= 5 || !within_webdav_root(attempt.url(), &root) {
+                return attempt.error("WebDAV redirects must stay inside the configured folder");
+            }
+            attempt.follow()
+        }))
+        .user_agent("Wallta/0.1")
+        .build()
+        .map_err(|_| "Could not initialize WebDAV client.".into())
+}
+
+struct WebdavPage {
+    images: Vec<MediaItem>,
+    folders: Vec<Url>,
+}
 pub fn parse_webdav(xml: &str, base: &str, source: &str) -> Result<Vec<MediaItem>, String> {
+    let base = webdav_folder(network_url(base)?);
+    Ok(parse_webdav_page(xml, &base, &base, source, false)?.images)
+}
+fn parse_webdav_page(
+    xml: &str,
+    base: &Url,
+    root: &Url,
+    source: &str,
+    recursive: bool,
+) -> Result<WebdavPage, String> {
     use quick_xml::{events::Event, Reader};
-    let base = network_url(base)?;
+    if xml.len() as u64 > MAX_LIST_BYTES {
+        return Err("Source response exceeds the size limit.".into());
+    }
     let mut reader = Reader::from_str(xml);
     reader.config_mut().trim_text(true);
     let mut href = String::new();
     let mut mime = String::new();
     let mut field = Vec::new();
     let mut collection = false;
-    let mut result = Vec::new();
+    let mut images = Vec::new();
+    let mut folders = Vec::new();
+    let mut image_ids = HashSet::new();
+    let mut folder_ids = HashSet::new();
     loop {
         match reader
             .read_event()
@@ -171,19 +230,30 @@ pub fn parse_webdav(xml: &str, base: &str, source: &str) -> Result<Vec<MediaItem
                 }
             }
             Event::End(e) => {
-                if e.local_name().as_ref() == b"response" && !collection {
-                    if let Ok(url) = base.join(&href) {
-                        if network_url(url.as_str()).is_ok()
-                            && url.origin() == base.origin()
-                            && url.path().starts_with(base.path())
-                            && !url.path().ends_with('/')
-                            && (is_image(url.path()) || mime.starts_with("image/"))
-                        {
-                            result.push(item(url.into(), None, source));
+                if e.local_name().as_ref() == b"response" && !href.is_empty() {
+                    if let Ok(mut url) = base.join(&href) {
+                        url.set_fragment(None);
+                        if collection {
+                            url = webdav_folder(url);
                         }
-                    }
-                    if result.len() >= MAX_ITEMS {
-                        break;
+                        if within_webdav_root(&url, root) {
+                            if collection && recursive && folder_ids.insert(url.as_str().to_owned())
+                            {
+                                if folders.len() >= 1000 {
+                                    return Err("WebDAV recursion is limited to 16 levels and 1000 folders. Choose a smaller folder.".into());
+                                }
+                                folders.push(url);
+                            } else if !collection
+                                && !url.path().ends_with('/')
+                                && (is_image(url.path()) || mime.starts_with("image/"))
+                                && images.len() < MAX_ITEMS
+                            {
+                                let media = item(url.into(), None, source);
+                                if image_ids.insert(media.id.clone()) {
+                                    images.push(media);
+                                }
+                            }
+                        }
                     }
                 }
                 field.clear();
@@ -193,7 +263,75 @@ pub fn parse_webdav(xml: &str, base: &str, source: &str) -> Result<Vec<MediaItem
             _ => (),
         }
     }
+    Ok(WebdavPage { images, folders })
+}
+
+fn walk_webdav(
+    source: &Source,
+    mut fetch: impl FnMut(&Url, Duration) -> Result<String, String>,
+) -> Result<Vec<MediaItem>, String> {
+    use std::{collections::VecDeque, time::Instant};
+    let root = webdav_root(source)?;
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let mut pending = VecDeque::from([(root.clone(), 0usize)]);
+    let mut visited = HashSet::from([root.as_str().to_owned()]);
+    let mut image_ids = HashSet::new();
+    let mut result = Vec::new();
+    while let Some((folder, depth)) = pending.pop_front() {
+        let remaining = deadline
+            .checked_duration_since(Instant::now())
+            .filter(|time| !time.is_zero())
+            .ok_or("WebDAV listing exceeded its 60 second limit. Use a smaller folder.")?;
+        let xml = fetch(&folder, remaining.min(Duration::from_secs(30)))?;
+        let page = parse_webdav_page(&xml, &folder, &root, &source.id, source.recursive)?;
+        if Instant::now() >= deadline {
+            return Err(
+                "WebDAV listing exceeded its 60 second limit. Use a smaller folder.".into(),
+            );
+        }
+        for image in page.images {
+            if image_ids.insert(image.id.clone()) {
+                result.push(image);
+                if result.len() >= MAX_ITEMS {
+                    return Ok(result);
+                }
+            }
+        }
+        for child in page.folders {
+            if visited.contains(child.as_str()) {
+                continue;
+            }
+            if depth >= 16 || visited.len() >= 1000 {
+                return Err("WebDAV recursion is limited to 16 levels and 1000 folders. Choose a smaller folder.".into());
+            }
+            visited.insert(child.as_str().to_owned());
+            pending.push_back((child, depth + 1));
+        }
+    }
     Ok(result)
+}
+fn list_webdav(source: &Source) -> Result<Vec<MediaItem>, String> {
+    let client = webdav_client(&webdav_root(source)?)?;
+    walk_webdav(source, |folder, timeout| {
+        let request = client.request(reqwest::Method::from_bytes(b"PROPFIND").unwrap(), folder.clone())
+            .timeout(timeout)
+            .header("Depth", "1")
+            .header("Content-Type", "application/xml")
+            .body("<?xml version=\"1.0\"?><d:propfind xmlns:d=\"DAV:\"><d:prop><d:resourcetype/><d:getcontenttype/></d:prop></d:propfind>");
+        // All queued URLs and redirect targets are constrained to this HTTPS root.
+        let request = if let Some(user) = &source.username {
+            request.basic_auth(user, source.password.as_ref())
+        } else {
+            request
+        };
+        let bytes = bounded_response(
+            request
+                .send()
+                .map_err(|_| "Could not connect to WebDAV.".to_string())?,
+            MAX_LIST_BYTES,
+        )?;
+        String::from_utf8(bytes).map_err(|_| "WebDAV XML must be UTF-8.".into())
+    })
 }
 
 fn local_list(source: &Source) -> Result<Vec<MediaItem>, String> {
@@ -250,32 +388,7 @@ pub fn list_source(client: &Client, source: &Source) -> Result<Vec<MediaItem>, S
                 std::str::from_utf8(&bytes).map_err(|_| "Manifest must be UTF-8.".to_string())?;
             parse_manifest(text, &source.location, &source.id)
         }
-        "webdav" => {
-            let mut url = network_url(&source.location)?;
-            if (source.password.is_some() || source.username.is_some()) && url.scheme() != "https" {
-                return Err("WebDAV credentials require HTTPS.".into());
-            }
-            if !url.path().ends_with('/') {
-                url.set_path(&format!("{}/", url.path()));
-            }
-            let request = client.request(reqwest::Method::from_bytes(b"PROPFIND").unwrap(), url.clone()).header("Depth", "1").header("Content-Type", "application/xml").body("<?xml version=\"1.0\"?><d:propfind xmlns:d=\"DAV:\"><d:prop><d:resourcetype/><d:getcontenttype/></d:prop></d:propfind>");
-            let request = if let Some(user) = &source.username {
-                request.basic_auth(user, source.password.as_ref())
-            } else {
-                request
-            };
-            let bytes = bounded_response(
-                request
-                    .send()
-                    .map_err(|_| "Could not connect to WebDAV.".to_string())?,
-                MAX_LIST_BYTES,
-            )?;
-            parse_webdav(
-                std::str::from_utf8(&bytes).map_err(|_| "WebDAV XML must be UTF-8.".to_string())?,
-                url.as_str(),
-                &source.id,
-            )
-        }
+        "webdav" => list_webdav(source),
         "drive" => list_drive(client, source),
         "photos" => list_photos(client, source),
         _ => Err("Unknown source type.".into()),
@@ -483,8 +596,21 @@ pub fn download(client: &Client, media: &MediaItem, source: &Source) -> Result<V
     let resolved = crate::google::authorize_source(source)?;
     let source = &resolved;
     let url = network_url(&media.url)?;
+    // A dedicated redirect policy also prevents same-origin redirects from
+    // forwarding WebDAV credentials outside the granted root path.
+    let scoped_client;
+    let client = if source.kind == "webdav" {
+        let root = webdav_root(source)?;
+        if !within_webdav_root(&url, &root) {
+            return Err("The WebDAV image is outside the configured folder.".into());
+        }
+        scoped_client = webdav_client(&root)?;
+        &scoped_client
+    } else {
+        client
+    };
     let mut request = client.get(url.clone());
-    if source.kind == "webdav" && url.origin() == network_url(&source.location)?.origin() {
+    if source.kind == "webdav" {
         if let Some(user) = &source.username {
             request = request.basic_auth(user, source.password.as_ref());
         }
@@ -504,4 +630,118 @@ pub fn download(client: &Client, media: &MediaItem, source: &Source) -> Result<V
         })?,
         MAX_IMAGE_BYTES,
     )
+}
+
+#[cfg(test)]
+mod webdav_tests {
+    use super::*;
+
+    fn source() -> Source {
+        serde_json::from_value(serde_json::json!({"id":"dav", "name":"DAV", "kind":"webdav", "location":"https://dav.test/photos", "recursive":true, "enabled":true})).unwrap()
+    }
+    fn collection(href: &str) -> String {
+        format!("<d:response><d:href>{href}</d:href><d:propstat><d:prop><d:resourcetype><d:collection/></d:resourcetype></d:prop></d:propstat></d:response>")
+    }
+    fn image(href: &str) -> String {
+        format!("<d:response><d:href>{href}</d:href></d:response>")
+    }
+    fn page(entries: String) -> String {
+        format!(r#"<d:multistatus xmlns:d="DAV:">{entries}</d:multistatus>"#)
+    }
+
+    #[test]
+    fn recursive_webdav_uses_breadth_first_order_and_deduplicates_images() {
+        let mut visits = vec![];
+        let images = walk_webdav(&source(), |folder, timeout| {
+            assert!(timeout <= Duration::from_secs(30));
+            visits.push(folder.path().to_owned());
+            Ok(page(match folder.path() {
+                "/photos/" => collection("a/") + &collection("b/") + &image("root.jpg"),
+                "/photos/a/" => collection("deep/") + &image("/photos/root.jpg"),
+                "/photos/b/" => image("b.jpg"),
+                "/photos/a/deep/" => image("deep.jpg"),
+                path => panic!("Unexpected folder: {path}"),
+            }))
+        })
+        .unwrap();
+        assert_eq!(
+            visits,
+            vec!["/photos/", "/photos/a/", "/photos/b/", "/photos/a/deep/"]
+        );
+        assert_eq!(images.len(), 3);
+    }
+
+    #[test]
+    fn recursive_webdav_enforces_depth_limit_before_fetching_deeper_folder() {
+        let mut count = 0;
+        let result = walk_webdav(&source(), |_, _| {
+            count += 1;
+            Ok(page(collection("deeper/")))
+        });
+        assert!(result.unwrap_err().contains("16 levels"));
+        assert_eq!(count, 17); // root plus the permitted 16 descendants
+    }
+
+    #[test]
+    fn recursive_webdav_enforces_global_folder_budget_before_fetch() {
+        let mut count = 0;
+        let result = walk_webdav(&source(), |_, _| {
+            count += 1;
+            Ok(page(
+                (0..1000)
+                    .map(|id| collection(&format!("sub{id}/")))
+                    .collect(),
+            ))
+        });
+        assert!(result.unwrap_err().contains("1000 folders"));
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn recursive_webdav_caps_the_total_image_count() {
+        let images = walk_webdav(&source(), |_, _| {
+            Ok(page(
+                (0..10001).map(|id| image(&format!("{id}.jpg"))).collect(),
+            ))
+        })
+        .unwrap();
+        assert_eq!(images.len(), MAX_ITEMS);
+    }
+
+    #[test]
+    fn webdav_rejects_oversized_xml_and_encoded_path_escapes() {
+        assert!(parse_webdav(
+            &" ".repeat(MAX_LIST_BYTES as usize + 1),
+            "https://dav.test/photos/",
+            "dav"
+        )
+        .unwrap_err()
+        .contains("size limit"));
+        let images = parse_webdav(
+            &page(
+                image("/photos/%2f..%2fprivate.jpg")
+                    + &image("/photos/../private.jpg")
+                    + &image("https://other.test/photos/a.jpg")
+                    + &image("/photos2/a.jpg")
+                    + &image("/photos/ok.jpg"),
+            ),
+            "https://dav.test/photos/",
+            "dav",
+        )
+        .unwrap();
+        assert_eq!(images.len(), 1);
+        assert!(images[0].url.ends_with("/photos/ok.jpg"));
+    }
+
+    #[test]
+    fn webdav_never_fetches_http_with_source_credentials() {
+        let mut source = source();
+        source.location = "http://dav.test/photos".into();
+        source.username = Some("user".into());
+        assert!(walk_webdav(&source, |_, _| panic!(
+            "Credentials must be rejected before any request"
+        ))
+        .unwrap_err()
+        .contains("HTTPS"));
+    }
 }
