@@ -12,3 +12,8 @@ it('only links to HTTPS Google authorization and photo selection pages', () => {
   expect(googleVerificationUrl('javascript:alert(1)')).toBeNull();
   expect(googleVerificationUrl('https://google.com.evil.example')).toBeNull();
 });
+it('allows only the configured HTTPS relay origin for TV pairing', () => {
+  expect(googleVerificationUrl('https://relay.example/connect/abc', 'https://relay.example/')).toBe('https://relay.example/connect/abc');
+  expect(googleVerificationUrl('https://other.example/connect/abc', 'https://relay.example')).toBeNull();
+  expect(googleVerificationUrl('http://relay.example/connect/abc', 'http://relay.example')).toBeNull();
+});

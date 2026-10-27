@@ -35,8 +35,8 @@ export function SourceDialog({ initial, initialKind = 'local', onSave, onClose, 
     if (!await onSave({ ...source, name: source.name.trim(), location: source.location.trim() })) submitted.current = false;
   };
   const kinds: SourceKind[] = ['local', 'manifest', 'drive', 'photos'];
-  return <dialog ref={dialog} className="source-dialog" onCancel={onClose} aria-labelledby="source-dialog-title">
-    <div className="dialog-heading"><div><span className="eyebrow">BỘ SƯU TẬP CỦA BẠN</span><h2 id="source-dialog-title">{initial ? 'Chỉnh sửa nguồn ảnh' : 'Thêm một chút cảm hứng'}</h2></div><button className="icon-button" aria-label="Đóng" onClick={onClose}><X size={20} /></button></div>
+  return <dialog ref={dialog} className="source-dialog" onCancel={event => { event.preventDefault(); if (!busy) onClose(); }} aria-labelledby="source-dialog-title">
+    <div className="dialog-heading"><div><span className="eyebrow">BỘ SƯU TẬP CỦA BẠN</span><h2 id="source-dialog-title">{initial ? 'Chỉnh sửa nguồn ảnh' : 'Thêm một chút cảm hứng'}</h2></div><button className="icon-button" aria-label="Đóng" onClick={onClose} disabled={busy}><X size={20} /></button></div>
     <p className="dialog-subtitle">Ảnh ở đâu, Wallta theo bạn đến đó.</p>
     {!initial && <div className="source-kind-picker">{kinds.map(kind => <button key={kind} className={source.kind === kind || (kind === 'manifest' && ['url','webdav'].includes(source.kind)) ? 'selected' : ''} onClick={() => { update({ kind, location: '' }); setError(''); }}><SourceIcon kind={kind} /><span>{kind === 'local' ? 'Thiết bị' : kind === 'manifest' ? 'Online' : sourceLabels[kind]}</span></button>)}</div>}
     <form onSubmit={submit}>
@@ -64,7 +64,7 @@ export function SourceDialog({ initial, initialKind = 'local', onSave, onClose, 
         {['drive','photos'].includes(source.kind) && <details className="advanced-settings" open={source.kind === 'photos'}><summary>Thông tin kết nối <ArrowUpRight size={13} /></summary>{source.kind === 'drive' && <label className="field">Google API key · thư mục công khai<input type="password" autoComplete="off" placeholder={initial ? 'Giữ API key đã lưu' : 'API key của dự án Google'} value={source.apiKey ?? ''} onChange={event => update({ apiKey: event.target.value })} /></label>}<label className="field">Access token · nguồn riêng<input type="password" autoComplete="off" placeholder={initial ? 'Giữ quyền truy cập đã lưu' : 'Token OAuth đã được cấp quyền'} value={source.accessToken ?? ''} onChange={event => update({ accessToken: event.target.value })} /></label><small>Token nhập thủ công có thể hết hạn. Hướng dẫn kết nối nằm trong tài liệu thiết lập Google của Wallta.</small></details>}
       </>}
       {error && <p className="form-error" role="alert">{error}</p>}
-      <div className="dialog-footer"><button type="button" className="button secondary" onClick={onClose}>Để sau</button><button className="button primary" type="submit" disabled={busy || picking}><Check size={17} />{busy ? 'Đang lưu…' : initial ? 'Lưu thay đổi' : 'Thêm nguồn ảnh'}</button></div>
+      <div className="dialog-footer"><button type="button" className="button secondary" onClick={onClose} disabled={busy}>Để sau</button><button className="button primary" type="submit" disabled={busy || picking}><Check size={17} />{busy ? 'Đang lưu…' : initial ? 'Lưu thay đổi' : 'Thêm nguồn ảnh'}</button></div>
     </form>
   </dialog>;
 }

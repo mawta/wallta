@@ -106,7 +106,7 @@ export async function callNative<T>(command: string, args: Record<string, unknow
   if (isDesktop()) return invoke<T>(command, args);
   if (isAndroid()) return new Promise<T>((resolve, reject) => {
     const id = uuid();
-    const timer = setTimeout(() => { pending.delete(id); reject(new Error('Thiết bị phản hồi quá lâu. Hãy thử lại.')); }, command === 'pick_folder' ? 180000 : 90000);
+    const timer = setTimeout(() => { pending.delete(id); reject(new Error('Thiết bị phản hồi quá lâu. Hãy thử lại.')); }, ['pick_folder', 'google_begin'].includes(command) ? 180000 : 90000);
     pending.set(id, { resolve: value => resolve(value as T), reject, timer });
     try { window.WalltaAndroid!.postMessage(JSON.stringify({ id, command, args })); }
     catch (error) { clearTimeout(timer); pending.delete(id); reject(error); }
