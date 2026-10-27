@@ -1,0 +1,12 @@
+import { cp, mkdir, readFile, rm } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
+const root = fileURLToPath(new URL('../', import.meta.url));
+const source = fileURLToPath(new URL('../dist/', import.meta.url));
+const target = fileURLToPath(new URL('../android/app/src/main/assets/web/', import.meta.url));
+const index = await readFile(new URL('../dist/index.html', import.meta.url), 'utf8');
+if (/https?:\/\/[^"']+\.(js|css)/i.test(index)) throw new Error('Android must bundle frontend scripts and styles locally.');
+if (!target.startsWith(root)) throw new Error('Asset destination is outside workspace');
+await rm(target, { recursive: true, force: true });
+await mkdir(target, { recursive: true });
+await cp(source, target, { recursive: true });
+console.log('Bundled dist into Android WebView assets.');
