@@ -18,7 +18,8 @@ object TrustedWebView {
         val loader = WebViewAssetLoader.Builder().addPathHandler("/media/", object : WebViewAssetLoader.PathHandler {
             override fun handle(path: String): WebResourceResponse {
                 if (!path.matches(Regex("[a-f0-9]{64}\\.img"))) return denied()
-                val file = File(File(context.cacheDir, "media"), path)
+                // Original images can be 120 MP. Never expose those to WebView's decoder.
+                val file = VisualCache.file(context, path.substringBefore('.'))
                 return if (file.isFile) WebResourceResponse("image/jpeg", null, file.inputStream()) else denied()
             }
         }).addPathHandler("/", object : WebViewAssetLoader.PathHandler {

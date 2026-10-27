@@ -22,6 +22,13 @@ import java.time.LocalDateTime
 import java.util.concurrent.TimeUnit
 
 object Rotation {
+    fun <T> loadUsable(store: StateStore, items: List<Media>, settings: JSONObject, key: String = "rotation", ensureCurrent: () -> Unit, discard: (T) -> Unit = {}, load: (Media) -> T): Pair<Media, T> {
+        val r = store.get(key) ?: JSONObject(); val used = r.optJSONArray("used") ?: JSONArray()
+        val consumed = (0 until used.length()).map { used.getString(it) }.toSet()
+        val byId = items.associateBy { it.id }
+        val loaded = MediaSafety.firstUsable(items.map { it.id }, consumed, settings.optString("order") == "shuffle", r.optString("current"), ensureCurrent, discard) { id -> load(byId.getValue(id)) }
+        return byId.getValue(loaded.first) to loaded.second
+    }
     fun choose(store: StateStore, items: List<Media>, settings: JSONObject, key: String = "rotation"): Media {
         val r = store.get(key) ?: JSONObject(); val used = r.optJSONArray("used") ?: JSONArray()
         val ids = items.map { it.id }; val consumed = (0 until used.length()).map { used.getString(it) }.toSet().intersect(ids.toSet())
@@ -39,16 +46,21 @@ object Rotation {
 object WallpaperEngine {
     fun allowed(settings: JSONObject) = Policy.inSchedule(settings.optBoolean("scheduleEnabled"), settings.optJSONArray("days")?.let { a -> (0 until a.length()).map { a.getInt(it) }.toSet() } ?: emptySet(), settings.optString("startTime", "07:00"), settings.optString("endTime", "23:00"), LocalDateTime.now())
     fun apply(context: Context, manual: Boolean = false): JSONObject {
-        val store = StateStore(context); val initial = store.state(); val revision = store.revision(); val settings = initial.getJSONObject("settings")
+        val store = StateStore(context); val snapshot = synchronized(StateStore.lock) { store.state() to store.revision() }
+        val initial = snapshot.first; val revision = snapshot.second; val settings = initial.getJSONObject("settings")
         if (!manual && (!initial.optBoolean("running") || !allowed(settings))) return store.state(true)
         val manager = WallpaperManager.getInstance(context)
         require(manager.isWallpaperSupported && manager.isSetWallpaperAllowed) { "Firmware does not permit changing the Home wallpaper. Use Wallta in Screensaver settings." }
-        val repo = MediaRepository(context, store); val items = repo.list(); val media = Rotation.choose(store, items, settings)
-        val file = repo.image(media)
-        val bitmap = render(file.absolutePath, settings.optString("fit", "fill"), manager.desiredMinimumWidth.coerceIn(720, 2560), manager.desiredMinimumHeight.coerceIn(720, 2560), settings.optBoolean("blurBackground"))
+        fun ensureCurrent() = synchronized(StateStore.lock) { check(store.revision() == revision && (manual || store.state().optBoolean("running")) && !Thread.currentThread().isInterrupted) { "Wallpaper operation cancelled by a newer setting" } }
+        val repo = MediaRepository(context, store); val items = repo.list()
+        val loaded = Rotation.loadUsable(store, items, settings, ensureCurrent = ::ensureCurrent, discard = { bitmap: Bitmap -> bitmap.recycle() }) { candidate ->
+            val file = repo.image(candidate)
+            render(file.absolutePath, settings.optString("fit", "fill"), manager.desiredMinimumWidth.coerceIn(720, 2560), manager.desiredMinimumHeight.coerceIn(720, 2560), settings.optBoolean("blurBackground"))
+        }
+        val media = loaded.first; val bitmap = loaded.second
         try {
             synchronized(StateStore.lock) {
-                check(store.revision() == revision && (manual || store.state().optBoolean("running")) && !Thread.currentThread().isInterrupted) { "Wallpaper operation cancelled by a newer setting" }
+                ensureCurrent()
                 val result = manager.setBitmap(bitmap, null, true, WallpaperManager.FLAG_SYSTEM)
                 check(result != 0) { "Firmware rejected the wallpaper" }
                 Rotation.consumed(store, items, media)

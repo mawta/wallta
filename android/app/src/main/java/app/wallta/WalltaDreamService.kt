@@ -25,16 +25,29 @@ class WalltaDreamService : DreamService() {
         override fun run() {
             if (!active) return
             work = io.submit {
-                val store = StateStore(applicationContext); val settings = store.state().getJSONObject("settings")
+                val store = StateStore(applicationContext)
+                val snapshot = synchronized(StateStore.lock) { store.state().getJSONObject("settings") to store.revision() }
+                val settings = snapshot.first; val revision = snapshot.second
+                fun ensureCurrent() { check(active && !Thread.currentThread().isInterrupted && store.revision() == revision) { "Screensaver operation cancelled" } }
                 try {
                     check(WallpaperEngine.allowed(settings)) { "Wallta is outside the configured schedule" }
                     val repo = MediaRepository(applicationContext, store)
-                    val pair = Net.scoped(requestTag) { val items = repo.list(); val media = Rotation.choose(store, items, settings, "dreamRotation"); repo.image(media); items to media }
+                    val pair = Net.scoped(requestTag) {
+                        val items = repo.list()
+                        val loaded = Rotation.loadUsable(store, items, settings, "dreamRotation", ::ensureCurrent) { candidate -> repo.visual(candidate) }
+                        items to loaded.first
+                    }
                     val items = pair.first; val media = pair.second
                     if (!active || Thread.currentThread().isInterrupted) return@submit
-                    Rotation.consumed(store, items, media, "dreamRotation")
                     val url = "${TrustedWebView.origin}/media/${media.id}.img"
-                    handler.post { if (active) web?.evaluateJavascript("window.show&&window.show(${JSONObject.quote(url)},${JSONObject.quote(settings.optString("fit"))},${settings.optBoolean("blurBackground")},${settings.optBoolean("showClock")})", null) }
+                    handler.post {
+                        synchronized(StateStore.lock) {
+                            if (active && store.revision() == revision) {
+                                web?.evaluateJavascript("window.show&&window.show(${JSONObject.quote(url)},${JSONObject.quote(settings.optString("fit"))},${settings.optBoolean("blurBackground")},${settings.optBoolean("showClock")})", null)
+                                Rotation.consumed(store, items, media, "dreamRotation")
+                            }
+                        }
+                    }
                 } catch (e: Exception) { handler.post { if (active) web?.evaluateJavascript("window.fail&&window.fail(${JSONObject.quote(e.message ?: "Add an image source in Wallta")})", null) } }
                 finally { if (active) handler.postDelayed(this, settings.optLong("slideshowSeconds", 30).coerceIn(5, 86400) * 1000) }
             }

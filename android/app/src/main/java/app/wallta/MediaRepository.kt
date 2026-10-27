@@ -84,6 +84,7 @@ class MediaRepository(private val context: Context, private val store: StateStor
             return (0 until a.length()).mapNotNull { i -> val entry = a.getJSONObject(i); val name = entry.getString("file"); if (!name.matches(Regex("[a-f0-9]{64}\\.img")) || !File(folder, name).isFile) null else Media(Policy.hash("${s.getString("id")}:${s.getString("location")}:$name"), entry.optString("name", "Photo"), "${s.getString("location")}/$name", s.getString("id")) }
         }
         val root = DocumentFile.fromTreeUri(context, Uri.parse(s.getString("location"))) ?: error("Choose the folder again")
+        check(root.exists() && root.isDirectory && root.canRead()) { "Local or USB folder is unavailable. Reconnect storage or choose the folder again." }
         val items = mutableListOf<Media>(); var visited = 0
         fun scan(folder: DocumentFile, depth: Int) {
             if (depth > 16 || visited++ >= 1000 || Thread.currentThread().isInterrupted) return
@@ -99,9 +100,14 @@ class MediaRepository(private val context: Context, private val store: StateStor
         val sources = store.state().getJSONArray("sources")
         val source = (0 until sources.length()).map { sources.getJSONObject(it) }.find { it.optString("id") == media.sourceId } ?: error("Source removed")
         return when (source.getString("kind")) {
-            "webdav" -> mapOf("Authorization" to "Basic " + Base64.encodeToString("${source.optString("username")}:${source.optString("password")}".toByteArray(), Base64.NO_WRAP))
-            "drive" -> (DriveRelay(store).session(media.sourceId)?.optString("token")?.takeIf { it.isNotBlank() } ?: source.optString("accessToken").takeIf { it.isNotBlank() })?.let { mapOf("Authorization" to "Bearer $it") } ?: emptyMap()
-            "photos" -> mapOf("Authorization" to "Bearer " + (source.optString("accessToken").takeIf { it.isNotBlank() } ?: GoogleAmbient(context, store).token(media.sourceId)))
+            "webdav" -> { require(MediaSafety.within(media.url, source.getString("location"))) { "Image is outside the active WebDAV origin/folder" }; mapOf("Authorization" to "Basic " + Base64.encodeToString("${source.optString("username")}:${source.optString("password")}".toByteArray(), Base64.NO_WRAP)) }
+            "drive" -> {
+                val relay = DriveRelay(store).session(media.sourceId)?.takeIf { it.optString("phase") == "ready" }
+                val base = if (relay != null) "${relay.getString("relayUrl")}/api/drive/media/" else "https://www.googleapis.com/drive/v3/files/"
+                require(MediaSafety.within(media.url, base)) { "Image is outside the active Drive provider" }
+                (relay?.optString("token")?.takeIf { it.isNotBlank() } ?: source.optString("accessToken").takeIf { it.isNotBlank() })?.let { mapOf("Authorization" to "Bearer $it") } ?: emptyMap()
+            }
+            "photos" -> { require(MediaSafety.photosUrl(media.url)) { "Photos image must use Google's media origin" }; mapOf("Authorization" to "Bearer " + (source.optString("accessToken").takeIf { it.isNotBlank() } ?: GoogleAmbient(context, store).token(media.sourceId))) }
             else -> emptyMap()
         }
     }
@@ -163,6 +169,10 @@ class MediaRepository(private val context: Context, private val store: StateStor
         scan(root, 0); return items
     }
     fun cacheFile(id: String): File { require(id.matches(Regex("[a-f0-9]{64}"))); return File(dir, "$id.img") }
+    fun visual(media: Media): File {
+        val snapshot = synchronized(StateStore.lock) { store.revision() to (store.get("cacheEpoch")?.optLong("value") ?: 0L) }
+        return VisualCache.prepare(context, store, media, image(media), snapshot)
+    }
     fun image(media: Media): File {
         val target = cacheFile(media.id)
         val state = store.state(); val revision = store.revision(); val cacheEpoch = store.get("cacheEpoch")?.optLong("value") ?: 0L
@@ -189,6 +199,7 @@ class MediaRepository(private val context: Context, private val store: StateStor
             check(!Thread.currentThread().isInterrupted && store.revision() == revision && (store.get("cacheEpoch")?.optLong("value") ?: 0L) == cacheEpoch) { "Image operation cancelled by newer state or cache clear" }
             val temp = File.createTempFile("image-", ".tmp", dir)
             try { temp.writeBytes(bytes); require(temp.renameTo(target)) { "Cannot cache image" } } finally { temp.delete() }
+            VisualCache.file(context, media.id).delete()
             val ledger = store.get("cacheOwners") ?: JSONObject(); ledger.put(media.id, JSONObject().put("source", media.sourceId).put("photos", media.photos).put("createdAt", System.currentTimeMillis())); store.put("cacheOwners", ledger)
         }
         trim(state.getJSONObject("settings").optInt("cacheLimitMb", 256).toLong() * 1024 * 1024, media.id)
@@ -196,17 +207,17 @@ class MediaRepository(private val context: Context, private val store: StateStor
     }
     fun trim(limit: Long, keep: String = "") = synchronized(StateStore.lock) {
         val files = dir.listFiles()?.filter { it.extension == "img" }?.sortedBy { it.lastModified() } ?: emptyList()
-        var bytes = files.sumOf { it.length() }; val ledger = store.get("cacheOwners") ?: JSONObject()
-        for (f in files) if (bytes > limit && f.nameWithoutExtension != keep) { bytes -= f.length(); f.delete(); ledger.remove(f.nameWithoutExtension) }
+        var bytes = files.sumOf { it.length() + VisualCache.file(context, it.nameWithoutExtension).length() }; val ledger = store.get("cacheOwners") ?: JSONObject()
+        for (f in files) if (bytes > limit && f.nameWithoutExtension != keep) { val visual = VisualCache.file(context, f.nameWithoutExtension); bytes -= f.length() + visual.length(); f.delete(); visual.delete(); ledger.remove(f.nameWithoutExtension) }
         store.put("cacheOwners", ledger)
     }
     fun clearSource(source: String) = synchronized(StateStore.lock) {
         store.invalidateCache()
         val ledger = store.get("cacheOwners") ?: JSONObject()
-        ledger.keys().asSequence().toList().filter { ledger.getJSONObject(it).optString("source") == source }.forEach { cacheFile(it).delete(); ledger.remove(it) }
+        ledger.keys().asSequence().toList().filter { ledger.getJSONObject(it).optString("source") == source }.forEach { cacheFile(it).delete(); VisualCache.file(context, it).delete(); ledger.remove(it) }
         store.put("cacheOwners", ledger); store.put("catalog:$source", null)
     }
-    fun clear() = synchronized(StateStore.lock) { store.invalidateCache(); dir.listFiles()?.forEach { it.delete() }; store.put("cacheOwners", null) }
+    fun clear() = synchronized(StateStore.lock) { store.invalidateCache(); dir.listFiles()?.forEach { it.delete() }; File(context.cacheDir, "visual").listFiles()?.forEach { it.delete() }; store.put("cacheOwners", null) }
     fun releaseUnusedGrants() {
         val a = store.state().getJSONArray("sources")
         val used = (0 until a.length()).map { a.getJSONObject(it) }.filter { it.optString("kind") == "local" }.map { it.optString("location") }.toSet()

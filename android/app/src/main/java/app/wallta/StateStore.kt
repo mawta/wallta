@@ -79,6 +79,19 @@ class StateStore(private val context: Context) {
             val pending = root.optJSONObject("${type}Pending:$id") ?: continue
             val location = if (type == "google") pending.optString("deviceId") else if (type == "import") pending.optString("location") else pending.optString("folder")
             if (pending.optString("phase") == "ready" && source.optString("location") == location) {
+                if (type == "relay") {
+                    val active = root.optJSONObject("relay:$id")
+                    if (active?.optString("nonce") != pending.optString("nonce") || active?.optString("relayUrl") != pending.optString("relayUrl")) {
+                        val ledger = root.optJSONObject("cacheOwners") ?: JSONObject()
+                        ledger.keys().asSequence().toList().filter { ledger.getJSONObject(it).optString("source") == id && it.matches(Regex("[a-f0-9]{64}")) }.forEach { mediaId ->
+                            File(File(context.cacheDir, "media"), "$mediaId.img").delete()
+                            File(File(context.cacheDir, "visual"), "$mediaId.jpg").delete()
+                            ledger.remove(mediaId)
+                        }
+                        root.put("cacheOwners", ledger); root.remove("catalog:$id")
+                        root.put("cacheEpoch", JSONObject().put("value", (root.optJSONObject("cacheEpoch")?.optLong("value") ?: 0L) + 1))
+                    }
+                }
                 pending.put("pending", false); root.put("$type:$id", pending); root.remove("${type}Pending:$id")
             }
         }
