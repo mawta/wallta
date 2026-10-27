@@ -416,15 +416,23 @@ fn google_account(
         .ok()?;
         account_name(&about["user"], "emailAddress", "displayName")
     } else {
-        // Use only identity already granted; Photos Picker does not require extra profile scopes.
+        // Photos imports retain account provenance through the requested OpenID email scope.
         let profile = read_json(
             client
-                .get("https://www.googleapis.com/oauth2/v3/userinfo")
+                .get("https://openidconnect.googleapis.com/v1/userinfo")
                 .bearer_auth(access_token)
                 .timeout(Duration::from_secs(5)),
         )
         .ok()?;
         account_name(&profile, "email", "name")
+    }
+}
+
+fn authorization_scope(kind: &str) -> &'static str {
+    if kind == "drive" {
+        "https://www.googleapis.com/auth/drive.readonly"
+    } else {
+        "openid email https://www.googleapis.com/auth/photospicker.mediaitems.readonly"
     }
 }
 
@@ -446,11 +454,7 @@ fn connect(
     );
     let state = random_string(48);
     let verifier = random_string(64);
-    let scope = if kind == "drive" {
-        "https://www.googleapis.com/auth/drive.readonly"
-    } else {
-        "https://www.googleapis.com/auth/photospicker.mediaitems.readonly"
-    };
+    let scope = authorization_scope(&kind);
     let mut authorization =
         url::Url::parse("https://accounts.google.com/o/oauth2/v2/auth").unwrap();
     authorization.query_pairs_mut().extend_pairs([
@@ -835,6 +839,22 @@ pub async fn google_disconnect(source_id: String) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn photos_authorization_requests_email_identity_and_picker_access() {
+        let photos: Vec<_> = authorization_scope("photos").split_whitespace().collect();
+        assert_eq!(
+            photos,
+            vec![
+                "openid",
+                "email",
+                "https://www.googleapis.com/auth/photospicker.mediaitems.readonly"
+            ]
+        );
+        assert_eq!(
+            authorization_scope("drive"),
+            "https://www.googleapis.com/auth/drive.readonly"
+        );
+    }
     #[test]
     fn account_display_name_is_used_when_email_is_unavailable() {
         assert_eq!(
