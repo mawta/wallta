@@ -2,7 +2,7 @@
 
 Ứng dụng tự đổi hình nền cho Android, Android TV từ Android 8 trở lên và Windows.
 
-[Tải bản dùng thử](https://github.com/mawta/wallta/releases/tag/v0.1.1) · [Hướng dẫn cài và sử dụng](docs/quick-start.md) · [Checksum và kết quả build](docs/artifacts.md).
+[Tải bộ cài](https://github.com/mawta/wallta/releases/latest) · [Hướng dẫn cài và sử dụng](docs/quick-start.md) · [Cập nhật trong app](docs/updating.md) · [Checksum và kết quả build](docs/artifacts.md).
 
 Giao diện React + TypeScript dùng chung; Windows chạy bằng Tauri/Rust, Android/TV chạy bằng Kotlin và WebView đóng gói trong APK. Bộ lập lịch native chạy độc lập với giao diện. Laravel cung cấp relay tùy chọn cho Drive riêng trên TV.
 
@@ -14,6 +14,7 @@ Giao diện React + TypeScript dùng chung; Windows chạy bằng Tauri/Rust, An
 - Google Photos: TV dùng Ambient API; Windows nhập ảnh qua Picker API; Android dùng trình chọn ảnh hệ thống/cloud nếu thiết bị có nhà cung cấp tương ứng. Nhập ảnh tạo bộ ảnh local, không tự đồng bộ album.
 - Ngẫu nhiên dùng hết một vòng trước khi lặp, tuần tự, chọn ngày/khung giờ qua đêm, fit/fill/stretch, nền mờ, giới hạn cache và chỉ tải qua Wi-Fi.
 - Windows có khay hệ thống, khởi động cùng máy. Android có WorkManager và TV screensaver. Đồng hồ hiển thị trong trình chiếu/screensaver.
+- Cài đặt → Cập nhật: kiểm tra mỗi ngày khi mở app, tải và cài bản mới từ GitHub theo lựa chọn của người dùng.
 
 ## Chạy và build
 
@@ -27,7 +28,7 @@ npm run dev
 
 Windows 10/11 x64: cài Rust stable, Visual Studio C++ Build Tools và WebView2, sau đó `npm run tauri -- dev` hoặc `npm run tauri -- build`. Bộ cài NSIS nằm trong `src-tauri/target/release/bundle/nsis/`.
 
-Android 8+ (API 26): dùng JDK 17, Gradle 8.14 và SDK 35. Xem [hướng dẫn Android/TV](android/README.md). CI tạo APK debug để sideload; bản cài Windows hiện chưa ký chứng thư phát hành.
+Android 8+ (API 26): dùng JDK 17, Gradle 8.14 và SDK 35. Xem [hướng dẫn Android/TV](android/README.md). Bản phát hành từ 0.1.2 dùng khóa ký APK cố định; CI kiểm thử tạo APK debug riêng. Bộ cài Windows có chữ ký xác minh cập nhật nhưng chưa ký chứng thư Authenticode.
 
 Ba workflow GitHub Actions kiểm tra Windows, Android và relay. Repo đã công khai; tải bộ cài tại GitHub Releases không cần đăng nhập. Actions artifacts lưu kết quả build phục vụ kiểm tra.
 

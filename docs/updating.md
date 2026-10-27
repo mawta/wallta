@@ -1,16 +1,16 @@
-# Updating Wallta
+# Cập nhật Wallta
 
-Open **Settings → Updates** to check your version and look for an update. Wallta also checks once a day while the app is open. Checks use the public [stable GitHub Release](https://github.com/mawta/wallta/releases/latest); no login is required. Prereleases are excluded. Wallta downloads and installs only when you select the update action.
+Mở **Cài đặt → Cập nhật** để kiểm tra phiên bản, bấm **Tải bản mới**, rồi **Cài đặt**. Wallta tự kiểm tra tối đa mỗi ngày khi mở app; không tự tải hoặc cài. Bản cập nhật lấy từ [GitHub Releases công khai](https://github.com/mawta/wallta/releases/latest), không cần đăng nhập và bỏ qua bản prerelease.
 
-On Windows, Wallta verifies the installer with its embedded updater public key, including the signed version, before opening the installer. These updater signatures do not provide Windows Authenticode signing: Windows may show an unknown publisher warning.
+Windows xác minh chữ ký bộ cài và phiên bản trước khi mở trình cài đặt. Chữ ký cập nhật không phải Authenticode; Windows vẫn có thể cảnh báo nhà phát hành chưa xác định.
 
-On Android 8.0 (API 26) and later, Wallta verifies the APK size, SHA-256, package, newer version and signing identity before asking Android to install it. Android may ask you to allow Wallta to install apps. Finish installation in the system prompt. Keep the app open while downloading.
+Android/TV 8+ xác minh dung lượng, SHA-256, package, phiên bản và khóa ký APK. Nếu được hỏi, cho phép Wallta cài ứng dụng, trở lại app và bấm **Tiếp tục cài**, rồi xác nhận trong trình cài của Android. Giữ app mở khi tải.
 
-## Moving from 0.1.1
+## Chuyển từ 0.1.1
 
-Install [0.1.2 manually](https://github.com/mawta/wallta/releases/tag/v0.1.2) once to enable in-app updates. The older app cannot update itself.
+Cài thủ công [bản 0.1.2](https://github.com/mawta/wallta/releases/tag/v0.1.2) một lần để có chức năng cập nhật trong app.
 
-Older Android debug APKs use a different signing key. Android may require uninstalling that app before installing the signed release. Uninstalling removes app settings and app-owned imported photos; preserve any photos and settings you need first. Releases from 0.1.2 use one fixed release key so future upgrades preserve app data.
+APK debug cũ dùng khóa ký khác nên có thể phải gỡ trước khi cài bản mới. **Gỡ app sẽ xóa cài đặt và ảnh đã nhập vào app; sao lưu trước.** Từ 0.1.2 dùng khóa ký cố định để những lần nâng cấp tiếp theo giữ dữ liệu.
 
 ## Publishing a release
 

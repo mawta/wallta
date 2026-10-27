@@ -17,6 +17,8 @@ gradle testDebugUnitTest assembleDebug
 
 Debug APK: `app/build/outputs/apk/debug/app-debug.apk`. CI uploads it as `Wallta-Android-debug`. This debug APK is for sideload testing, not a signed Play Store release.
 
+Stable GitHub Releases from 0.1.2 use a fixed signing key and support **Settings → Updates**. Release builds require the four signing environment variables described in [the update guide](../docs/updating.md); debug keys are never used for release. Moving from an older debug APK may require uninstalling it, which removes settings and app-owned imports. Back up those files first.
+
 ## Platform behavior
 
 - Phone and TV launchers are supported. The app does not implement or replace the TV Home launcher.

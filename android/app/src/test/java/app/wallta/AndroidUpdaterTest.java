@@ -3,6 +3,7 @@ package app.wallta;
 import android.app.Activity;
 import android.content.Intent;
 import android.content.pm.PackageInfo;
+import android.content.pm.PackageManager;
 import android.content.pm.Signature;
 import android.net.Uri;
 import androidx.core.content.FileProvider;
@@ -14,6 +15,10 @@ import org.robolectric.RobolectricTestRunner;
 import org.robolectric.Shadows;
 import org.robolectric.annotation.Config;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import static org.junit.Assert.*;
 
 @RunWith(RobolectricTestRunner.class)
@@ -21,7 +26,14 @@ import static org.junit.Assert.*;
 public class AndroidUpdaterTest {
     public static class InstallerActivity extends Activity {
         Intent launched; int request = -1;
-        @Override public void startActivity(Intent intent) { launched = intent; }
+        Runnable beforePackageQuery, beforeLaunch;
+        @Override public PackageManager getPackageManager() {
+            PackageManager packages = super.getPackageManager();
+            Runnable hook = beforePackageQuery; beforePackageQuery = null;
+            if (hook != null) hook.run();
+            return packages;
+        }
+        @Override public void startActivity(Intent intent) { if (beforeLaunch != null) beforeLaunch.run(); launched = intent; }
         @Override public void startActivityForResult(Intent intent, int code) { launched = intent; request = code; }
     }
     private PackageInfo info(String name, String version, int code, String signer) {
@@ -108,9 +120,62 @@ public class AndroidUpdaterTest {
         try (AndroidUpdater updater = new AndroidUpdater(activity, new StateStore(activity))) {
             File directory = new File(activity.getCacheDir(), "updates"); directory.mkdirs();
             File apk = new File(directory, "verified.apk"); apk.createNewFile();
+            assertEquals("content", FileProvider.getUriForFile(activity, "app.wallta.updates", apk).getScheme());
             updater.launchInstall(apk, () -> true, result::set);
             assertEquals("installing", result.get()); assertEquals(AndroidUpdater.INSTALL_REQUEST, activity.request);
             assertEquals(Intent.ACTION_INSTALL_PACKAGE, activity.launched.getAction()); assertFalse(activity.isFinishing());
+        }
+    }
+    @Test public void cancellationCannotInterleaveWithSystemUiHandoff() throws Exception { assertAtomicHandoff(false); }
+    @Test public void closeCannotInterleaveWithSystemUiHandoff() throws Exception { assertAtomicHandoff(true); }
+    private void assertAtomicHandoff(boolean close) throws Exception {
+        InstallerActivity activity = Robolectric.buildActivity(InstallerActivity.class).setup().get();
+        Shadows.shadowOf(activity.getPackageManager()).setCanRequestPackageInstalls(false);
+        CountDownLatch atPermissionQuery = new CountDownLatch(1), releasePermissionQuery = new CountDownLatch(1);
+        CountDownLatch invalidationStarted = new CountDownLatch(1), invalidationFinished = new CountDownLatch(1);
+        AtomicBoolean blockedOnHandoff = new AtomicBoolean();
+        AtomicInteger sequence = new AtomicInteger(), launchOrder = new AtomicInteger(), callbackOrder = new AtomicInteger(), invalidateOrder = new AtomicInteger();
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        try (AndroidUpdater updater = new AndroidUpdater(activity, new StateStore(activity))) {
+            java.lang.reflect.Field managerField = AndroidUpdater.class.getDeclaredField("manager"); managerField.setAccessible(true);
+            UpdateManager manager = (UpdateManager) managerField.get(updater);
+            java.lang.reflect.Field workerField = UpdateManager.class.getDeclaredField("worker"); workerField.setAccessible(true);
+            ((java.util.concurrent.ExecutorService) workerField.get(manager)).submit(() -> {}).get(5, TimeUnit.SECONDS);
+            // Model the real verified worker-to-main handoff without a network request or real APK.
+            java.lang.reflect.Field busy = UpdateManager.class.getDeclaredField("busy"); busy.setAccessible(true); busy.setBoolean(manager, true);
+            java.lang.reflect.Field phase = UpdateManager.class.getDeclaredField("phase"); phase.setAccessible(true); phase.set(manager, "installing");
+            activity.beforePackageQuery = () -> {
+                atPermissionQuery.countDown();
+                try { if (!releasePermissionQuery.await(5, TimeUnit.SECONDS)) throw new AssertionError("Timed out releasing permission lookup"); }
+                catch (InterruptedException e) { throw new AssertionError(e); }
+            };
+            activity.beforeLaunch = () -> launchOrder.set(sequence.incrementAndGet());
+            Thread invalidator = new Thread(() -> {
+                try {
+                    if (!atPermissionQuery.await(5, TimeUnit.SECONDS)) throw new AssertionError("Permission lookup never started");
+                    invalidationStarted.countDown();
+                    if (close) updater.close(); else updater.cancel();
+                    invalidateOrder.set(sequence.incrementAndGet());
+                } catch (Throwable e) { failure.set(e); }
+                finally { invalidationFinished.countDown(); }
+            }, "update-invalidator");
+            Thread releaser = new Thread(() -> {
+                try {
+                    if (!invalidationStarted.await(5, TimeUnit.SECONDS)) throw new AssertionError("Invalidation never started");
+                    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+                    while (invalidator.getState() != Thread.State.BLOCKED && invalidationFinished.getCount() != 0 && System.nanoTime() < deadline) Thread.yield();
+                    blockedOnHandoff.set(invalidator.getState() == Thread.State.BLOCKED);
+                } catch (Throwable e) { failure.set(e); }
+                finally { releasePermissionQuery.countDown(); }
+            }, "update-handoff-release");
+            invalidator.start(); releaser.start();
+            updater.launchInstall(new File(activity.getCacheDir(), "updates/verified.apk"), () -> true,
+                result -> callbackOrder.set(sequence.incrementAndGet()));
+            invalidator.join(5000); releaser.join(5000);
+            assertNull(failure.get()); assertFalse(invalidator.isAlive()); assertFalse(releaser.isAlive());
+            assertTrue("Cancellation/close must wait for the active system UI handoff", blockedOnHandoff.get());
+            assertTrue(launchOrder.get() > 0 && launchOrder.get() < invalidateOrder.get());
+            assertTrue(callbackOrder.get() > launchOrder.get() && callbackOrder.get() < invalidateOrder.get());
         }
     }
 }

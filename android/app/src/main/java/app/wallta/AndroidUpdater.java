@@ -66,6 +66,8 @@ final class AndroidUpdater implements UpdateManager.Environment, AutoCloseable {
     }
     public void launchInstall(File file, BooleanSupplier active, Consumer<String> result) {
         activity.runOnUiThread(() -> {
+            // Serialize the final active check, system UI launch and handoff callback with cancel/close.
+            synchronized (manager) {
             if (!active.getAsBoolean() || activity.isFinishing() || activity.isDestroyed()) return;
             try {
                 if (!activity.getPackageManager().canRequestPackageInstalls()) {
@@ -76,7 +78,11 @@ final class AndroidUpdater implements UpdateManager.Environment, AutoCloseable {
                 Uri uri = FileProvider.getUriForFile(activity, activity.getPackageName() + ".updates", file);
                 activity.startActivityForResult(installIntent(uri), INSTALL_REQUEST);
                 result.accept("installing");
-            } catch (Exception e) { result.accept("Không mở được trình cài đặt trên thiết bị này. Hãy kiểm tra quyền cài ứng dụng và thử lại."); }
+            } catch (Exception e) {
+                android.util.Log.w("WalltaUpdater", "Could not open update installer", e);
+                result.accept("Không mở được trình cài đặt trên thiết bị này. Hãy kiểm tra quyền cài ứng dụng và thử lại.");
+            }
+            }
         });
     }
     static void requireIdentity(PackageInfo current, PackageInfo candidate, UpdatePolicy.Release release) {

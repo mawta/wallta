@@ -1,8 +1,8 @@
 # Bản dùng thử Wallta 0.1.1
 
-Windows build từ [`6c9acae`](https://github.com/mawta/wallta/commit/6c9acae43ccee27a15d025670fddd6068d9d9942); Android build từ `08da730`. Các thay đổi giữa hai commit chỉ thuộc bộ giải mã ảnh và kiểm thử Android. Những commit tài liệu sau đó không thay đổi mã ứng dụng hoặc cấu hình build.
+Windows build từ commit trước khi làm sạch lịch sử `6c9acae`; mã nguồn tương ứng hiện tại là [`455091f`](https://github.com/mawta/wallta/commit/455091f0368605a523e4552093f2968b5728f23a). Android build từ commit cũ `08da730`, tương ứng [`ea1709b`](https://github.com/mawta/wallta/commit/ea1709b1c7aa2b1b4b96f9b6a63888affd3b3f23). Các thay đổi giữa hai bản chỉ thuộc bộ giải mã ảnh và kiểm thử Android. Bộ cài gốc được giữ nguyên.
 
-[Tải bản dùng thử trong repo private](https://github.com/mawta/wallta/releases/tag/v0.1.1), yêu cầu tài khoản có quyền truy cập. Các file cũng được giữ tại `output/installers/0.1.1/` trong thư mục dự án trên máy phát triển; không đưa binary vào lịch sử Git.
+[Tải bản dùng thử 0.1.1](https://github.com/mawta/wallta/releases/tag/v0.1.1), không cần đăng nhập. Các file cũng được giữ tại `output/installers/0.1.1/` trong thư mục dự án trên máy phát triển; không đưa binary vào lịch sử Git.
 
 Thêm hướng dẫn lấy key/OAuth ngay trong form Drive/Photos và chuyển ảnh qua QR/link Wi-Fi hai chiều. Máy còn lại chỉ cần trình duyệt; Wallta xác nhận trước khi thêm ảnh nhận vào thư viện. [Cách chuyển ảnh](local-transfer.md).
 
