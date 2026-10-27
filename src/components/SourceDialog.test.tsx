@@ -22,7 +22,7 @@ it('keeps an OAuth source mounted while saving, including Escape and close butto
     await act(async () => host.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })));
     await act(async () => {
       host.querySelector<HTMLButtonElement>('[aria-label="Đóng"]')!.click();
-      Array.from(host.querySelectorAll('button')).find(button => button.textContent === 'Để sau')!.click();
+      Array.from(host.querySelectorAll('button')).find(button => button.textContent === 'Hủy')!.click();
       host.querySelector('dialog')!.dispatchEvent(new Event('cancel', { bubbles: true, cancelable: true }));
     });
     expect(closed).not.toHaveBeenCalled();

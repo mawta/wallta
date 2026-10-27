@@ -14,7 +14,7 @@ export function SourceIcon({ kind, size = 22 }: { kind: SourceKind; size?: numbe
 export function SettingRow({ title, description, children }: { title: string; description?: string; children: ReactNode }) {
   return <div className="setting-row"><div><strong>{title}</strong>{description && <p>{description}</p>}</div><div className="setting-control">{children}</div></div>;
 }
-export function SectionTitle({ eyebrow, title, description, children }: { eyebrow?: string; title: string; description?: string; children?: ReactNode }) {
-  return <div className="section-heading"><div>{eyebrow && <span className="eyebrow">{eyebrow}</span>}<h2>{title}</h2>{description && <p>{description}</p>}</div>{children}</div>;
+export function SectionTitle({ title, children }: { title: string; children?: ReactNode }) {
+  return <div className="section-heading"><div><h2>{title}</h2></div>{children}</div>;
 }
 export const intervalLabel = (seconds: number) => seconds < 60 ? `${seconds} giây` : seconds < 3600 ? `${Math.round(seconds / 60)} phút` : `${Number((seconds / 3600).toFixed(1))} giờ`;
