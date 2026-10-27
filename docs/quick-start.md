@@ -3,7 +3,7 @@
 ## Cài đặt
 
 - Windows 10/11 x64: mở bộ cài `Wallta_0.1.0_x64-setup.exe`. Bản thử nghiệm chưa ký chứng thư nên Windows có thể cảnh báo nhà phát hành chưa xác định.
-- Android/Android TV 8+: cho phép cài từ nguồn đang dùng rồi mở APK, hoặc dùng `adb install app-debug.apk`. Đây là APK ký debug; nếu chữ ký khác bản cũ, cần gỡ bản cũ trước, thao tác đó sẽ xóa cấu hình cũ.
+- Android/Android TV 8+: cho phép cài từ nguồn đang dùng rồi mở APK, hoặc dùng `adb install Wallta_0.1.0_android-debug.apk`. Đây là APK ký debug; nếu chữ ký khác bản cũ, cần gỡ bản cũ trước, thao tác đó sẽ xóa cấu hình cũ.
 - Bản cài trong repo private yêu cầu tài khoản GitHub có quyền truy cập. Không cần tài khoản Wallta.
 
 ## Bộ ảnh đầu tiên
