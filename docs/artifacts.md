@@ -1,22 +1,26 @@
-# Bản dùng thử Wallta 0.1.0
+# Bản dùng thử Wallta 0.1.1
 
-Mã ứng dụng đã build: [`c47d5473d9cb8cf6e69a751324a81f2f5d6325d7`](https://github.com/mawta/wallta/commit/c47d5473d9cb8cf6e69a751324a81f2f5d6325d7). Các commit tài liệu sau đó không thay đổi mã ứng dụng hay cấu hình build.
+Windows build từ [`6c9acae`](https://github.com/mawta/wallta/commit/6c9acae43ccee27a15d025670fddd6068d9d9942); Android build từ `08da730`. Các thay đổi giữa hai commit chỉ thuộc bộ giải mã ảnh và kiểm thử Android. Những commit tài liệu sau đó không thay đổi mã ứng dụng hoặc cấu hình build.
 
-[Tải bản dùng thử trong repo private](https://github.com/mawta/wallta/releases/tag/v0.1.0), yêu cầu tài khoản có quyền truy cập. Các file cũng được giữ tại `output/installers/0.1.0/` trong thư mục dự án trên máy phát triển; không đưa binary vào lịch sử Git.
+[Tải bản dùng thử trong repo private](https://github.com/mawta/wallta/releases/tag/v0.1.1), yêu cầu tài khoản có quyền truy cập. Các file cũng được giữ tại `output/installers/0.1.1/` trong thư mục dự án trên máy phát triển; không đưa binary vào lịch sử Git.
+
+Thêm hướng dẫn lấy key/OAuth ngay trong form Drive/Photos và chuyển ảnh qua QR/link Wi-Fi hai chiều. Máy còn lại chỉ cần trình duyệt; Wallta xác nhận trước khi thêm ảnh nhận vào thư viện. [Cách chuyển ảnh](local-transfer.md).
 
 | File | Dung lượng | SHA-256 |
 |---|---:|---|
-| `Wallta_0.1.0_x64-setup.exe` | 4,094,507 bytes | `eae3ed988a34a2398cf75ae4a0eed495ba0c30f60504a3a8c004eb7048d6eae0` |
-| `Wallta_0.1.0_android-debug.apk` | 3,638,796 bytes | `baa7f1894b898891829e93cb2eb7f6b81013c3bf91291f33f76997c0a2975a2b` |
+| `Wallta_0.1.1_x64-setup.exe` | 4,165,823 bytes | `f26f9ec89b994b90cd78052ba261657281e569ce76a8096c46c655888d4c5e83` |
+| `Wallta_0.1.1_android-debug.apk` | 3,667,255 bytes | `65d39201310cb73d3f7ed369e1d9fc2e7ac71a18b3b2b1ccfdc160c74376d6f6` |
 
-`SHA256SUMS.txt` đi kèm bản tải. Đã kiểm tra PE header của bộ cài Windows; CRC toàn bộ APK và sự có mặt của manifest, DEX, resources, HTML/JS/CSS đóng gói. Kiểm tra cấu trúc gói không thay thế cài và chạy trên thiết bị.
+`SHA256SUMS.txt` đi kèm bản tải. Đã kiểm tra PE header của bộ cài Windows; CRC toàn bộ 148 mục trong APK; manifest, DEX, resources, giao diện/hướng dẫn Google và native LAN host. Trang LAN trong APK khớp nguồn dùng chung. Kiểm tra cấu trúc gói không thay thế cài và chạy trên thiết bị.
 
 ## CI tại commit build
 
-- [Windows desktop — thành công](https://github.com/mawta/wallta/actions/runs/40453767864): 18 Vitest, 31 Rust tests và NSIS installer.
-- [Android APK — thành công](https://github.com/mawta/wallta/actions/runs/40453767895): 18 Vitest, 22 JVM tests và debug APK.
-- [Drive relay — thành công](https://github.com/mawta/wallta/actions/runs/40453767943): 10 PHPUnit tests / 62 assertions.
+- [Windows desktop — thành công](https://github.com/mawta/wallta/actions/runs/40473826503): 23 Vitest, 46 Rust tests và NSIS installer.
+- [Android APK — thành công](https://github.com/mawta/wallta/actions/runs/40474876432): 23 Vitest, 39 JVM tests và debug APK. Kiểm thử giải mã dùng native graphics Robolectric SDK 26/28, không phải thiết bị thật.
+- Relay không đổi từ [lượt kiểm chứng trước](https://github.com/mawta/wallta/actions/runs/40453767943): 10 PHPUnit tests / 62 assertions.
+
+Đã thử trang truyền ảnh thật qua trình duyệt với Java HTTP host trên loopback: upload thành công, tải ngược ảnh đã chọn và SHA-256 khớp ảnh gốc. Kiểm thử React xác nhận chọn ảnh local, dừng trước khi đóng, nhận trước khi refresh và cleanup khi bridge timeout; kiểm thử trang web xác nhận gửi tiếp không lặp ảnh đã báo thành công.
 
 Windows chưa ký chứng thư phát hành; APK ký debug để sideload. Chưa có kiểm thử trên TV/điện thoại/Windows cài thực hoặc Google credential thật. Google Photos TV cần quyền Partner Program; Drive riêng Android/TV cần relay HTTPS được cấu hình. Không có relay công cộng vận hành sẵn.
 
-[Hướng dẫn dùng thử](quick-start.md) · [Ma trận kiểm chứng và các ca cần thiết bị](testing.md) · [Thiết lập Google](setup-google.md).
+[Hướng dẫn dùng thử](quick-start.md) · [Ma trận kiểm chứng và các ca cần thiết bị](testing.md) · [Thiết lập Google](setup-google.md) · [Lưu trữ bản 0.1.0](artifacts-0.1.0.md).

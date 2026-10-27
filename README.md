@@ -2,7 +2,7 @@
 
 Ứng dụng tự đổi hình nền cho Android, Android TV từ Android 8 trở lên và Windows.
 
-[Tải bản dùng thử](https://github.com/mawta/wallta/releases/tag/v0.1.0) · [Hướng dẫn cài và sử dụng](docs/quick-start.md) · [Checksum và kết quả build](docs/artifacts.md).
+[Tải bản dùng thử](https://github.com/mawta/wallta/releases/tag/v0.1.1) · [Hướng dẫn cài và sử dụng](docs/quick-start.md) · [Checksum và kết quả build](docs/artifacts.md).
 
 Giao diện React + TypeScript dùng chung; Windows chạy bằng Tauri/Rust, Android/TV chạy bằng Kotlin và WebView đóng gói trong APK. Bộ lập lịch native chạy độc lập với giao diện. Laravel cung cấp relay tùy chọn cho Drive riêng trên TV.
 

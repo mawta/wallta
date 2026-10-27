@@ -2,7 +2,18 @@
 
 Đối chiếu mã nguồn và bằng chứng thực thi; CI build không thay thế kiểm tra trên thiết bị. Đây là bản thử nghiệm có bộ cài Windows chưa ký chứng thư và APK ký debug.
 
-## Đã thực hiện
+## Bổ sung trong 0.1.1
+
+| Phạm vi | Kết quả |
+|---|---|
+| React/TypeScript | 23 tests và production build đạt; chọn local, stop/accept, cleanup khi start timeout, retry upload không lặp ảnh đã báo thành công |
+| Windows | 46 Rust tests đạt; upload/download TCP, truyền nhiều gói có trễ, Host/Origin/token/framing, giới hạn, expiry/cleanup, xác nhận nhận và giữ cấu hình mới nhất; NSIS build đạt |
+| Android | 39 JVM tests đạt; TCP thật, giới hạn/hủy/xác nhận, container PNG/JPEG/WebP và native pixel decoding trên Robolectric SDK 26/28; APK build đạt |
+| Trình duyệt LAN | Trang thật chạy bằng Java host trên loopback; gửi ảnh và tải ngược thành công, SHA-256 khớp bản gốc; đã lưu ảnh chụp trang và hướng dẫn Google |
+
+[Commit, CI và checksum 0.1.1](artifacts.md). Các ca LAN qua Wi-Fi/firewall trên cặp thiết bị thật và đăng nhập Google bằng credential thật chưa được thực hiện.
+
+## Bằng chứng nền từ bản 0.1.0
 
 | Phạm vi | Kết quả / bằng chứng |
 |---|---|
@@ -30,6 +41,7 @@ Test trước sửa đã quan sát được lỗi: pause bị chặn bởi downl
 - Android TV: D-pad và Back trong WebView, menu Screensaver, DreamService qua đêm/remote exit, ảnh lớn trên TV ít RAM; kiểm tra Home wallpaper riêng cho từng firmware/launcher.
 - Google: OAuth project thật, consent/refresh/revoke, quota và URL hết hạn; Photos Ambient phải được Google Partner Program chấp thuận. Chưa có project/credential trong repo.
 - Relay: chạy HTTPS thật, proxy/session cookie/cache bền, hoàn tất QR từ điện thoại, TV poll và ngắt kết nối. Chưa triển khai server.
+- LAN: điện thoại ↔ TV/Windows trên cùng Wi-Fi; quét QR, tải ra ảnh đã chọn, nhận và xác nhận ảnh, đổi IP, guest/AP isolation, firewall, hết hạn khi màn hình khóa. Thử ảnh lớn trên TV ít RAM.
 
 Không có kết luận “hoạt động trên mọi TV Android 8+” khi chưa thử firmware. Một số TV cần cập nhật WebView hoặc DocumentsProvider; một số launcher không hiển thị wallpaper dù Android trả thành công.
 
