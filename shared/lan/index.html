@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="referrer" content="no-referrer"><title>Wallta — Gửi / nhận ảnh</title>
+  <style>
+    :root{color-scheme:dark;font:16px system-ui,sans-serif;background:#111515;color:#e9ede6}*{box-sizing:border-box}body{max-width:680px;margin:auto;padding:28px 20px}h1{font-size:26px}h2{font-size:19px;margin-top:0}p{line-height:1.6}.muted{color:#a7b2a7;font-size:14px}.panel{background:#1a201d;border:1px solid #354034;border-radius:14px;margin:22px 0;padding:22px}button,input{font:inherit}button,.download{display:inline-block;border:0;border-radius:8px;padding:12px 16px;background:#c8efa0;color:#203019;font-weight:600;text-decoration:none;cursor:pointer}button:disabled{opacity:.45;cursor:wait}input{display:block;max-width:100%;margin:16px 0}input::file-selector-button{padding:10px;border-radius:7px;border:1px solid #65765b;background:#273027;color:inherit}a:focus-visible,button:focus-visible,input:focus-visible{outline:3px solid #c8efa0;outline-offset:4px}.file{display:flex;align-items:center;justify-content:space-between;gap:12px;border-top:1px solid #354034;padding:14px 0}.file span{overflow-wrap:anywhere;min-width:0}.download{white-space:nowrap;font-size:14px}#message{white-space:pre-line}#message.error{color:#ffb3a7}footer{font-size:13px;color:#a7b2a7}
+  </style>
+</head>
+<body>
+  <h1>Wallta · Gửi / nhận ảnh</h1>
+  <p class="muted">Cùng Wi-Fi/LAN. Link có hiệu lực 10 phút. Giữ Wallta mở trên máy kia.</p>
+  <section class="panel"><h2>Gửi ảnh đến Wallta</h2>
+    <form id="upload"><label for="photos">JPG, PNG, WebP · 25 MB/ảnh · tối đa 50 ảnh / 256 MB</label><input id="photos" type="file" accept="image/jpeg,image/png,image/webp" multiple required><button id="send" type="submit" disabled>Gửi ảnh</button></form>
+    <p id="message" role="status" aria-live="polite">Đang kết nối…</p>
+    <p class="muted">Sau khi gửi, xác nhận “Thêm ảnh đã nhận” trong Wallta.</p>
+  </section>
+  <section class="panel"><h2>Tải ảnh từ Wallta</h2><div id="files">Đang tải danh sách…</div></section>
+  <footer>Chỉ ảnh được chọn mới hiển thị ở đây. HTTP trong mạng local, không mã hóa; dùng Wi-Fi tin cậy.</footer>
+  <script>
+    'use strict';
+    const prefix = location.pathname;
+    const valid = /^\/[a-f0-9]{64}\/$/.test(prefix);
+    const form = document.getElementById('upload'), picker = document.getElementById('photos'), send = document.getElementById('send'), message = document.getElementById('message'), files = document.getElementById('files');
+    let working = false, active = false, pending = null;
+    picker.addEventListener('change', () => { pending = null; send.textContent = 'Gửi ảnh'; });
+    function say(text, error = false) { message.textContent = text; message.className = error ? 'error' : ''; }
+    async function request(path, options = {}) {
+      const response = await fetch(prefix + path, { ...options, mode: 'same-origin', credentials: 'omit', cache: 'no-store', referrerPolicy: 'no-referrer' });
+      if (!response.ok) throw new Error(response.status === 404 || response.status === 410 ? 'Link đã hết hạn hoặc bị dừng. Mở phiên mới trong Wallta.' : response.status === 413 ? 'Vượt giới hạn ảnh hoặc dung lượng.' : response.status === 415 ? 'Chỉ nhận ảnh JPG, PNG, WebP hợp lệ.' : 'Không gửi được ảnh (HTTP ' + response.status + '). Kiểm tra kết nối và giới hạn ảnh.');
+      return response.json();
+    }
+    async function refresh() {
+      const state = await request('status'); active = state.active;
+      send.disabled = !active || working;
+      files.replaceChildren();
+      for (const file of state.outgoing || []) {
+        const row = document.createElement('div'); row.className = 'file';
+        const name = document.createElement('span'); name.textContent = file.name;
+        const link = document.createElement('a'); link.className = 'download'; link.textContent = 'Tải ảnh'; link.href = prefix + 'files/' + encodeURIComponent(file.id); link.setAttribute('download', ''); link.rel = 'noreferrer';
+        row.append(name, link); files.append(row);
+      }
+      if (!files.childElementCount) files.textContent = 'Chưa chọn ảnh để gửi từ Wallta.';
+      return state;
+    }
+    form.addEventListener('submit', async event => {
+      event.preventDefault(); if (working || !active) return;
+      const selected = pending || Array.from(picker.files || []);
+      if (!selected.length) { say('Chọn ảnh trước khi gửi.', true); return; }
+      if (selected.length > 50 || selected.some(file => file.size > 25 * 1024 * 1024) || selected.reduce((sum, file) => sum + file.size, 0) > 256 * 1024 * 1024) { say('Tối đa 50 ảnh / 256 MB; mỗi ảnh tối đa 25 MB.', true); return; }
+      pending = selected.slice();
+      working = true; send.disabled = true; picker.disabled = true; let completed = 0;
+      try {
+        for (const file of selected) {
+          say('Đang gửi ' + (completed + 1) + '/' + selected.length + ': ' + file.name);
+          await request('upload?name=' + encodeURIComponent(file.name), { method: 'POST', headers: { 'Content-Type': file.type || 'application/octet-stream' }, body: file }); completed++; pending.shift();
+        }
+        picker.value = ''; pending = null; send.textContent = 'Gửi ảnh'; say('Đã gửi ' + completed + ' ảnh. Xác nhận trong Wallta để lưu.');
+        await refresh();
+      } catch (error) { send.textContent = 'Gửi tiếp phần còn lại'; say('Đã gửi ' + completed + '/' + selected.length + ' ảnh. ' + error.message + ' Các ảnh đã gửi vẫn chờ xác nhận trong Wallta.', true); }
+      finally { working = false; picker.disabled = false; send.disabled = !active; }
+    });
+    if (valid) refresh().then(state => say(state.active ? 'Sẵn sàng · đã nhận ' + state.receivedCount + ' ảnh.' : 'Phiên đã dừng. Mở phiên mới trong Wallta.', !state.active)).catch(error => { active = false; send.disabled = true; files.textContent = 'Không lấy được danh sách ảnh.'; say(error.message, true); });
+    else { say('Link không hợp lệ. Quét lại QR trong Wallta.', true); files.textContent = 'Không có phiên kết nối.'; }
+  </script>
+</body>
+</html>

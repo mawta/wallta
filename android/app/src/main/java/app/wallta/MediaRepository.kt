@@ -16,6 +16,35 @@ import java.net.URI
 
 class MediaRepository(private val context: Context, private val store: StateStore = StateStore(context)) {
     private val dir = File(context.cacheDir, "media").apply { mkdirs() }
+    /** Resolve only original enabled local media; never export a remote image or a cached derivative. */
+    fun lanExports(ids: List<String>): List<LanTransferServer.Export> {
+        require(ids.size <= 50 && ids.distinct().size == ids.size && ids.all { it.matches(Regex("[a-f0-9]{64}")) }) { "Invalid local image selection" }
+        if (ids.isEmpty()) return emptyList()
+        val snapshot = synchronized(StateStore.lock) { store.state() to store.revision() }
+        val sources = snapshot.first.getJSONArray("sources")
+        val selected = mutableMapOf<String, Media>()
+        for (i in 0 until sources.length()) {
+            val source = sources.getJSONObject(i)
+            if (source.optString("kind") == "local" && source.optBoolean("enabled", true)) {
+                local(source).filter { it.id in ids }.forEach { selected[it.id] = it }
+            }
+        }
+        return ids.map { id ->
+            val media = selected[id] ?: error("Selected image is no longer available in an enabled local source")
+            LanTransferServer.Export(id, media.name) {
+                synchronized(StateStore.lock) { check(store.revision() == snapshot.second) { "Local sources changed. Start the transfer again." } }
+                if (media.url.startsWith("wallta-import://")) {
+                    val slash = media.url.lastIndexOf('/'); val name = media.url.substring(slash + 1)
+                    require(name.matches(Regex("[a-f0-9]{64}\\.img")))
+                    File(PhotoImporter.directory(context, media.url.substring(0, slash)), name).inputStream()
+                } else {
+                    val uri = Uri.parse(media.url)
+                    require(uri.scheme == "content") { "Selected file is not local" }
+                    context.contentResolver.openInputStream(uri) ?: error("Cannot read selected local image")
+                }
+            }
+        }
+    }
     fun networkAllowed(settings: JSONObject): Boolean {
         val cm = context.getSystemService(ConnectivityManager::class.java)
         val caps = cm.getNetworkCapabilities(cm.activeNetwork) ?: return false

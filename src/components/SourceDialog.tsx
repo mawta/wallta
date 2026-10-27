@@ -6,6 +6,7 @@ import { validateSource } from '../lib/rules';
 import { sourceLabels, type Source, type SourceKind } from '../lib/types';
 import { SourceIcon } from './ui';
 import { GoogleConnect } from './GoogleConnect';
+import { ConnectionHelp } from './ConnectionHelp';
 
 interface Props { initial?: Source; initialKind?: SourceKind; onSave: (source: Source) => Promise<boolean>; onClose: () => void; busy: boolean }
 export function SourceDialog({ initial, initialKind = 'local', onSave, onClose, busy }: Props) {
@@ -59,6 +60,7 @@ export function SourceDialog({ initial, initialKind = 'local', onSave, onClose, 
         {source.kind === 'drive' && <div className="inline-note">Công khai: API key. Riêng: đăng nhập Google Drive.</div>}
         {source.kind === 'photos' && <div className="inline-note">{isAndroid() ? 'TV: album qua Ambient API. Điện thoại: trình chọn ảnh hệ thống.' : 'Windows: nhập ảnh qua Picker, không tự đồng bộ album. TV: album qua Ambient API.'}</div>}
         {['drive','webdav'].includes(source.kind) && <label className="checkbox-row"><input type="checkbox" checked={source.recursive} onChange={event => update({ recursive: event.target.checked })} /> Bao gồm thư mục con</label>}
+        {(source.kind === 'drive' || source.kind === 'photos') && <ConnectionHelp kind={source.kind} />}
         {['drive','photos'].includes(source.kind) && <GoogleConnect key={source.kind} source={source} onConnected={update} />}
         {['drive','photos'].includes(source.kind) && <details className="advanced-settings" open={source.kind === 'photos'}><summary>Thông tin kết nối <ArrowUpRight size={13} /></summary>{source.kind === 'drive' && <label className="field">Google API key · thư mục công khai<input type="password" autoComplete="off" placeholder={initial ? 'Giữ API key đã lưu' : 'API key của dự án Google'} value={source.apiKey ?? ''} onChange={event => update({ apiKey: event.target.value })} /></label>}<label className="field">Access token · nguồn riêng<input type="password" autoComplete="off" placeholder={initial ? 'Giữ quyền truy cập đã lưu' : 'Token OAuth đã được cấp quyền'} value={source.accessToken ?? ''} onChange={event => update({ accessToken: event.target.value })} /></label><small>Token thủ công có thể hết hạn.</small></details>}
       </>}

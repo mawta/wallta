@@ -1,5 +1,6 @@
 mod commands;
 pub mod google;
+mod lan_commands;
 pub mod models;
 pub mod providers;
 pub mod rotation;
@@ -33,6 +34,9 @@ pub fn run() {
             .map_err(std::io::Error::other)?;
             let engine = Arc::new(commands::Engine::new(store).map_err(std::io::Error::other)?);
             app.manage(engine.clone());
+            app.manage(Arc::new(
+                lan::LanManager::new(&engine.store.root).map_err(std::io::Error::other)?,
+            ));
             let show = MenuItem::with_id(app, "show", "Show Wallta", true, None::<&str>)?;
             let next = MenuItem::with_id(app, "next", "Next wallpaper", true, None::<&str>)?;
             let pause = MenuItem::with_id(app, "pause", "Pause / Resume", true, None::<&str>)?;
@@ -50,7 +54,10 @@ pub fn run() {
                             let _ = window.set_focus();
                         }
                     }
-                    "quit" => app.exit(0),
+                    "quit" => {
+                        app.state::<Arc<lan::LanManager>>().stop();
+                        app.exit(0);
+                    }
                     "next" | "pause" => {
                         let engine = app.state::<Arc<commands::Engine>>().inner().clone();
                         let app = app.clone();
@@ -90,6 +97,7 @@ pub fn run() {
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
+                window.state::<Arc<lan::LanManager>>().stop();
                 let _ = window.hide();
             }
         })
@@ -104,11 +112,25 @@ pub fn run() {
             commands::get_capabilities,
             commands::clear_cache,
             commands::open_external,
+            lan_commands::lan_start,
+            lan_commands::lan_status,
+            lan_commands::lan_stop,
+            lan_commands::lan_accept,
             google::google_begin,
             google::google_poll,
             google::google_cancel,
             google::google_disconnect
         ])
-        .run(tauri::generate_context!())
-        .expect("Wallta failed to start");
+        .build(tauri::generate_context!())
+        .expect("Wallta failed to start")
+        .run(|app, event| {
+            if matches!(
+                event,
+                tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. }
+            ) {
+                app.state::<Arc<lan::LanManager>>().stop();
+            }
+        });
 }
+
+mod lan;

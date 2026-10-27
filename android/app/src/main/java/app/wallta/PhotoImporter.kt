@@ -18,6 +18,35 @@ class PhotoImporter(private val context: Context, private val store: StateStore 
             require(file.path.startsWith(base.path + File.separator)); return file
         }
     }
+    /** Explicit host confirmation copies received staging into the existing persistent import model. */
+    fun acceptTransferred(files: List<LanTransferServer.Received>): JSONObject = synchronized(StateStore.lock) {
+        require(files.isNotEmpty() && files.size <= 50) { "No received photos to add" }
+        val id = java.util.UUID.randomUUID().toString()
+        val state = store.state()
+        require(state.getJSONArray("sources").length() < 100) { "Maximum 100 sources" }
+        val pending = store.beginPending("import", id, JSONObject().put("phase", "copying"))
+        val location = "wallta-import://${Policy.hash(id)}/${pending.getString("nonce")}"
+        pending.put("location", location); store.saveSession("import", id, pending)
+        val folder = directory(context, location)
+        check(folder.mkdirs()) { "Cannot create received photo storage" }
+        var saveAttempted = false
+        try {
+            val items = JSONArray()
+            files.forEachIndexed { index, received ->
+                val name = "${Policy.hash("$id:$index")}.img"
+                received.file.copyTo(File(folder, name), overwrite = false)
+                items.put(JSONObject().put("file", name).put("name", received.name))
+            }
+            pending.put("phase", "ready").put("items", items); store.saveSession("import", id, pending)
+            state.getJSONArray("sources").put(JSONObject().put("id", id).put("name", "Ảnh nhận qua Wi-Fi").put("kind", "local").put("location", location).put("recursive", false).put("enabled", true))
+            saveAttempted = true
+            store.save(state)
+        } catch (e: Exception) {
+            // A save may have reached disk before a later read failed. Never delete potentially accepted files.
+            if (!saveAttempted) { folder.deleteRecursively(); store.removeSession("import", id, pending) }
+            throw e
+        }
+    }
     fun begin(id: String): JSONObject {
         require(id.length in 1..128)
         val activity = context as? MainActivity ?: error("Open Wallta to choose photos")

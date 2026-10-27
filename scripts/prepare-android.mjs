@@ -9,4 +9,7 @@ if (!target.startsWith(root)) throw new Error('Asset destination is outside work
 await rm(target, { recursive: true, force: true });
 await mkdir(target, { recursive: true });
 await cp(source, target, { recursive: true });
+const lanTarget = fileURLToPath(new URL('../android/app/src/main/assets/lan/', import.meta.url));
+await mkdir(lanTarget, { recursive: true });
+await cp(new URL('../shared/lan/index.html', import.meta.url), new URL('../android/app/src/main/assets/lan/index.html', import.meta.url));
 console.log('Bundled dist into Android WebView assets.');

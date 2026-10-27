@@ -23,6 +23,8 @@ Phím mũi tên di chuyển focus, Enter chọn. Trong ô nhập dùng Up/Down �
 
 ## Nguồn khác
 
+- Chuyển ảnh giữa điện thoại và TV/PC: **Nguồn ảnh → Gửi / nhận qua Wi-Fi**. Máy kia mở QR/link bằng trình duyệt; nhận xong xác nhận thêm ảnh. [Các bước chuyển ảnh](local-transfer.md).
+
 - Link online: dùng một URL ảnh, JSON danh sách ảnh hoặc WebDAV. Một trang web chia sẻ thư mục bất kỳ không bảo đảm liệt kê được ảnh. [Định dạng JSON](../README.md#nguồn-online).
 - Drive: thư mục công khai cần API key. Drive riêng dùng OAuth Windows hoặc [relay HTTPS](../relay/README.md) trên Android/TV.
 - Photos: [cần thiết lập Google](setup-google.md). TV dùng Ambient với quyền Partner Program; Windows dùng Picker để nhập bộ ảnh đã chọn; điện thoại dùng trình chọn ảnh hệ thống/cloud nếu có. Bộ ảnh nhập không tự theo dõi album.

@@ -34,6 +34,76 @@ pub struct Runtime {
     pub persistent: RuntimeState,
 }
 impl Engine {
+    /// Resolve IDs through enabled local providers only; never treat caller values as paths.
+    pub(crate) fn lan_exports(
+        &self,
+        ids: &[String],
+    ) -> Result<Vec<crate::lan::ExportInput>, String> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        if ids.len() > 50 || ids.iter().collect::<HashSet<_>>().len() != ids.len() {
+            return Err("Select at most 50 unique local images.".into());
+        }
+        let runtime = self.inner.lock().map_err(|e| e.to_string())?;
+        let mut resolved = Vec::new();
+        for source in runtime
+            .state
+            .sources
+            .iter()
+            .filter(|s| s.enabled && s.kind == "local")
+        {
+            for media in providers::list_source(&self.client, source)? {
+                if ids.contains(&media.id) {
+                    resolved.push(crate::lan::ExportInput {
+                        id: media.id,
+                        name: media.name,
+                        path: PathBuf::from(media.url),
+                    });
+                }
+            }
+        }
+        if resolved.len() != ids.len() {
+            return Err(
+                "Selected images must belong to an enabled local source. Refresh the library."
+                    .into(),
+            );
+        }
+        Ok(resolved)
+    }
+    /// Append to the fresh native state while holding its lock. Do not restart or apply rotation.
+    pub(crate) fn accept_lan_source(&self, path: &std::path::Path) -> Result<AppState, String> {
+        let mut runtime = self.inner.lock().map_err(|e| e.to_string())?;
+        if runtime.state.sources.len() >= 100 {
+            return Err(
+                "At most 100 sources are supported. Remove a source before adding received images."
+                    .into(),
+            );
+        }
+        let mut next = runtime.state.clone();
+        next.sources.push(Source {
+            id: format!(
+                "lan-{}",
+                path.file_name()
+                    .ok_or("Invalid received folder.")?
+                    .to_string_lossy()
+            ),
+            name: format!("Wi-Fi · {}", chrono::Local::now().format("%Y-%m-%d %H:%M")),
+            kind: "local".into(),
+            location: path.to_string_lossy().into_owned(),
+            recursive: false,
+            enabled: true,
+            username: None,
+            password: None,
+            api_key: None,
+            access_token: None,
+        });
+        self.store.save(&next)?;
+        self.revision.fetch_add(1, Ordering::SeqCst);
+        runtime.state = next;
+        runtime.media.clear();
+        Ok(storage::public_state(&mut runtime.state))
+    }
     pub fn new(store: Store) -> Result<Self, String> {
         let mut state = match store.load() {
             Ok(s) => s,
@@ -751,3 +821,7 @@ mod concurrency_tests {
         assert!(runtime.persistent.catalogs.is_empty());
     }
 }
+
+#[cfg(test)]
+#[path = "lan_engine_tests.rs"]
+mod lan_engine_tests;
