@@ -15,11 +15,11 @@ import java.io.File
 @Config(sdk = [28], manifest = Config.NONE)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class LanImageValidatorTest {
-    private fun png(): ByteArray {
+    private fun encoded(format: Bitmap.CompressFormat = Bitmap.CompressFormat.PNG): ByteArray {
         val bitmap = Bitmap.createBitmap(64, 64, Bitmap.Config.ARGB_8888)
         return try {
             ByteArrayOutputStream().use { out ->
-                check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, out))
+                check(bitmap.compress(format, 100, out))
                 out.toByteArray()
             }
         } finally { bitmap.recycle() }
@@ -28,8 +28,11 @@ class LanImageValidatorTest {
     @Test fun acceptsARealPixelStream() {
         val file = File.createTempFile("wallta-valid-", ".png")
         try {
-            file.writeBytes(png())
-            assertEquals("image/png", LanImageValidator.validate(file))
+            for ((format, mime) in listOf(Bitmap.CompressFormat.PNG to "image/png",
+                Bitmap.CompressFormat.JPEG to "image/jpeg", Bitmap.CompressFormat.WEBP to "image/webp")) {
+                file.writeBytes(encoded(format))
+                assertEquals(mime, LanImageValidator.validate(file))
+            }
         } finally { file.delete() }
     }
 
@@ -37,11 +40,14 @@ class LanImageValidatorTest {
         val file = File.createTempFile("wallta-corrupt-", ".png")
         try {
             // Keep all PNG metadata and framing, but break the IDAT zlib stream.
-            val bytes = png()
+            val bytes = encoded()
             val idat = (8 until bytes.size - 4).first { index ->
                 bytes.copyOfRange(index, index + 4).contentEquals("IDAT".toByteArray())
             }
             bytes[idat + 4] = 0
+            val length = java.nio.ByteBuffer.wrap(bytes, idat - 4, 4).int
+            val crc = java.util.zip.CRC32().apply { update(bytes, idat, length + 4) }
+            java.nio.ByteBuffer.wrap(bytes, idat + length + 4, 4).putInt(crc.value.toInt())
             file.writeBytes(bytes)
             val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
             BitmapFactory.decodeFile(file.absolutePath, bounds)

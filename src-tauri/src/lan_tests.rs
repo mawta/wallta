@@ -334,7 +334,8 @@ fn expiry_closes_partial_socket_without_native_polling() {
     write!(socket, "POST {}upload HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nOrigin: http://127.0.0.1:{}\r\nContent-Length: 1000\r\n\r\nx", url.path(), url.port().unwrap(), url.port().unwrap()).unwrap();
     let began = Instant::now();
     match socket.read(&mut [0; 1]) {
-        Ok(_) => (),
+        Ok(0) => (),
+        Ok(_) => panic!("Expiry must close the socket, not send an early HTTP error"),
         Err(error) => assert!(matches!(
             error.kind(),
             std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::ConnectionAborted
