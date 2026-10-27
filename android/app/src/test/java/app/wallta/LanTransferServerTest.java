@@ -15,7 +15,7 @@ import org.junit.Test;
 
 @SuppressWarnings(
     "try") // Explicit close is the behavior under test; try-with-resources also guarantees cleanup
-           // on failed assertions.
+// on failed assertions.
 public class LanTransferServerTest {
   private LanTransferServer server(File root, AtomicLong now, LanTransferServer.Limits limits)
       throws Exception {
@@ -64,6 +64,33 @@ public class LanTransferServerTest {
         "upload?name=photo.png",
         "Origin: http://" + uri.getAuthority() + "\r\n" + headers,
         body);
+  }
+
+  @Test
+  public void totalRequestDeadlineReleasesTheWorkerDespiteActiveDripping() throws Exception {
+    File root = Files.createTempDirectory("lan-deadline").toFile();
+    try (LanTransferServer s =
+        server(
+            root, new AtomicLong(1000), new LanTransferServer.Limits(1024, 4096, 5, 600000, 200))) {
+      s.start(Collections.emptyList());
+      String url = s.status().urls.get(0);
+      URI uri = URI.create(url);
+      try (Socket drip = new Socket(uri.getHost(), uri.getPort())) {
+        drip.getOutputStream().write('G');
+        drip.getOutputStream().flush();
+        Thread.sleep(80);
+        drip.getOutputStream().write('E');
+        drip.getOutputStream().flush();
+        Thread.sleep(80);
+        drip.getOutputStream().write('T');
+        drip.getOutputStream().flush();
+        long start = System.nanoTime();
+        assertTrue(request(url, "GET", "status", "", new byte[0]).contains("200 OK"));
+        assertTrue(
+            "Dripping request blocked the sole worker", System.nanoTime() - start < 1_000_000_000L);
+        assertTrue(s.status().active);
+      }
+    }
   }
 
   @Test

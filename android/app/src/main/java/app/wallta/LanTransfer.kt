@@ -1,7 +1,6 @@
 package app.wallta
 
 import android.content.Context
-import android.graphics.BitmapFactory
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -30,14 +29,8 @@ class LanTransfer(private val context: Context, private val store: StateStore) {
             .filter { LanTransferServer.privateIpv4(it) }.distinct()
         require(addresses.isNotEmpty()) { "No private Wi-Fi/LAN IPv4 address is available. Connect to Wi-Fi and try again." }
         val page = context.assets.open("lan/index.html").use { it.readBytes() }
-        val next = LanTransferServer(root, page, { file ->
-            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-            BitmapFactory.decodeFile(file.absolutePath, bounds)
-            require(bounds.outMimeType in listOf("image/jpeg", "image/png", "image/webp") && bounds.outWidth > 0 && bounds.outHeight > 0 && bounds.outWidth.toLong() * bounds.outHeight <= 120_000_000) {
-                "Only valid JPEG, PNG or WebP images up to 120 MP are supported"
-            }
-            bounds.outMimeType
-        }, addresses, System::currentTimeMillis, LanTransferServer.Limits.standard())
+        val next = LanTransferServer(root, page, LanImageValidator::validate,
+            addresses, System::currentTimeMillis, LanTransferServer.Limits.standard())
         server = next
         try {
             check(!closed) { "Activity closed" }

@@ -184,7 +184,8 @@ fn stop_closes_partial_upload_and_erases_staging() {
     manager.stop();
     assert!(began.elapsed() < Duration::from_secs(2));
     match socket.read(&mut [0; 1]) {
-        Ok(_) => (),
+        Ok(0) => (),
+        Ok(_) => panic!("Expiry must close the socket, not send an early HTTP error"),
         Err(error) => assert!(matches!(
             error.kind(),
             std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::ConnectionAborted
@@ -341,9 +342,34 @@ fn expiry_closes_partial_socket_without_native_polling() {
     }
     assert!(began.elapsed() < Duration::from_secs(2));
     // Wait only for the worker's final cleanup instruction, without calling status/stop.
-    std::thread::sleep(Duration::from_millis(30));
+    let cleanup_deadline = Instant::now() + Duration::from_secs(2);
+    while fs::read_dir(manager.root.join("staging")).unwrap().count() != 0
+        && Instant::now() < cleanup_deadline
+    {
+        std::thread::sleep(Duration::from_millis(10));
+    }
     assert_eq!(
         fs::read_dir(manager.root.join("staging")).unwrap().count(),
         0
     );
+}
+
+#[test]
+fn tcp_upload_waits_for_delayed_body_packets() {
+    let (_root, manager, status) = fixture(Duration::from_secs(60), vec![]);
+    let url = url::Url::parse(&status.urls[0]).unwrap();
+    let port = url.port().unwrap();
+    let mut socket = TcpStream::connect((Ipv4Addr::LOCALHOST, port)).unwrap();
+    socket
+        .set_read_timeout(Some(Duration::from_secs(3)))
+        .unwrap();
+    let bytes = png();
+    write!(socket, "POST {}upload HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nOrigin: http://127.0.0.1:{port}\r\nContent-Length: {}\r\n\r\n", url.path(), bytes.len()).unwrap();
+    socket.write_all(&bytes[..1]).unwrap();
+    std::thread::sleep(Duration::from_millis(75));
+    socket.write_all(&bytes[1..]).unwrap();
+    let mut response = Vec::new();
+    socket.read_to_end(&mut response).unwrap();
+    assert_eq!(code(&response), 200);
+    assert_eq!(manager.status().received_count, 1);
 }

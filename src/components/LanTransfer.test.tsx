@@ -58,3 +58,13 @@ it('refreshes the library only after the native host accepts received files', as
   await act(async () => accept());
   expect(received).toHaveBeenCalledOnce(); expect(closed).toHaveBeenCalledOnce();
 });
+
+it('stops a possibly late native session when starting fails', async () => {
+  vi.mocked(callNative).mockImplementation(command => command === 'lan_start'
+    ? Promise.reject(new Error('Native command timed out'))
+    : Promise.resolve(undefined as never));
+  await act(async () => root.render(<LanTransfer sources={[]} media={[]} onClose={vi.fn()} onReceived={vi.fn()} />));
+  await act(async () => button('Bật gửi / nhận').click());
+  expect(callNative).toHaveBeenCalledWith('lan_stop');
+  expect(host.textContent).toContain('Native command timed out');
+});

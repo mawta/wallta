@@ -385,6 +385,11 @@ fn serve(listener: TcpListener, shared: Arc<Shared>) {
     while shared.alive() {
         match listener.accept() {
             Ok((mut socket, _)) => {
+                // Winsock accepts inherit the listener's nonblocking mode. Restore blocking
+                // reads so partial TCP packets wait for data under the socket deadline.
+                if socket.set_nonblocking(false).is_err() {
+                    continue;
+                }
                 let _ = socket.set_read_timeout(Some(Duration::from_secs(1)));
                 let _ = socket.set_write_timeout(Some(Duration::from_secs(1)));
                 *shared.socket.lock().unwrap_or_else(|e| e.into_inner()) = socket.try_clone().ok();

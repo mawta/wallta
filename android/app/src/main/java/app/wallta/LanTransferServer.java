@@ -24,14 +24,20 @@ public final class LanTransferServer implements AutoCloseable {
   }
 
   public static final class Limits {
-    final long fileBytes, totalBytes, durationMillis;
+    final long fileBytes, totalBytes, durationMillis, requestMillis;
     final int count;
 
     public Limits(long fileBytes, long totalBytes, int count, long durationMillis) {
+      this(fileBytes, totalBytes, count, durationMillis, 30000);
+    }
+
+    public Limits(
+        long fileBytes, long totalBytes, int count, long durationMillis, long requestMillis) {
       this.fileBytes = fileBytes;
       this.totalBytes = totalBytes;
       this.count = count;
       this.durationMillis = durationMillis;
+      this.requestMillis = requestMillis;
     }
 
     public static Limits standard() {
@@ -302,6 +308,7 @@ public final class LanTransferServer implements AutoCloseable {
     delete(s.folder);
   }
 
+  @SuppressWarnings("try") // Deadline cancellation must close the active try-with-resources socket.
   private void serve(Session s) {
     try {
       while (s.active) {
@@ -309,7 +316,19 @@ public final class LanTransferServer implements AutoCloseable {
           s.client = socket;
           if (!s.active) break;
           socket.setSoTimeout(2000);
+          // Inactivity timeouts alone allow a dripping peer to occupy the sole worker.
+          // Closing the socket also bounds blocked writes to slow download clients.
+          TimerTask deadline =
+              new TimerTask() {
+                public void run() {
+                  try {
+                    socket.close();
+                  } catch (IOException ignored) {
+                  }
+                }
+              };
           try {
+            s.timer.schedule(deadline, limits.requestMillis);
             handle(s, socket);
           } catch (HttpError e) {
             respond(
@@ -329,6 +348,8 @@ public final class LanTransferServer implements AutoCloseable {
             } catch (IOException ignored) {
             }
           } finally {
+            deadline.cancel();
+            s.timer.purge();
             s.client = null;
           }
         } catch (IOException e) {

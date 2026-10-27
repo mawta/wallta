@@ -53,7 +53,11 @@ export function LanTransfer({ sources, media, onClose, onReceived }: LanTransfer
       const next = await callNative<LanStatus>('lan_start', { mediaIds: selected });
       if (!alive.current) { await callNative('lan_stop'); started.current = false; return; }
       setAddress(0); setStatus(next);
-    } catch (err) { started.current = false; throw err; }
+    } catch (err) {
+      // A bridge timeout can precede native completion; stop queues behind that start.
+      try { await callNative('lan_stop'); started.current = false; } catch { /* Retry cleanup on close/unmount. */ }
+      throw err;
+    }
   });
   return <dialog ref={dialog} className="source-dialog lan-dialog" aria-labelledby="lan-title" onCancel={event => { event.preventDefault(); close(); }}>
     <div className="dialog-heading"><h2 id="lan-title">Gửi / nhận qua Wi-Fi</h2><button className="icon-button" aria-label="Đóng" disabled={busy} onClick={close}><X size={20} /></button></div>
