@@ -12,7 +12,7 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [28], manifest = Config.NONE)
+@Config(sdk = [26, 28], manifest = Config.NONE)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class LanImageValidatorTest {
     private fun encoded(format: Bitmap.CompressFormat = Bitmap.CompressFormat.PNG): ByteArray {

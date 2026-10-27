@@ -4,6 +4,8 @@ import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.zip.CRC32;
+import java.util.zip.DataFormatException;
+import java.util.zip.Inflater;
 
 /** Container completeness guard before the platform's bounded pixel decoder. */
 final class ImageContainer {
@@ -27,6 +29,15 @@ final class ImageContainer {
   }
 
   private static void png(DataInputStream in, long size) throws IOException {
+    Inflater pixels = new Inflater();
+    try {
+      png(in, size, pixels);
+    } finally {
+      pixels.end();
+    }
+  }
+
+  private static void png(DataInputStream in, long size, Inflater pixelsStream) throws IOException {
     byte[] signature = new byte[8];
     in.readFully(signature);
     if (!Arrays.equals(signature, new byte[] {(byte) 137, 80, 78, 71, 13, 10, 26, 10}))
@@ -34,6 +45,8 @@ final class ImageContainer {
     long remaining = size - 8;
     boolean first = true, pixels = false;
     byte[] buffer = new byte[8192];
+    byte[] decoded = new byte[8192];
+    long decodedBytes = 0;
     while (remaining >= 12) {
       long length = in.readInt() & 0xffffffffL;
       if (length > remaining - 12) throw new IOException("Truncated PNG chunk");
@@ -49,6 +62,25 @@ final class ImageContainer {
         int count = (int) Math.min(left, buffer.length);
         in.readFully(buffer, 0, count);
         crc.update(buffer, 0, count);
+        if (name.equals("IDAT")) {
+          if (pixelsStream.finished()) throw new IOException("Extra PNG pixel data");
+          pixelsStream.setInput(buffer, 0, count);
+          try {
+            while (!pixelsStream.needsInput() && !pixelsStream.finished()) {
+              int produced = pixelsStream.inflate(decoded);
+              decodedBytes += produced;
+              // 120 MP, at most 8 bytes/pixel plus one filter byte per row.
+              if (decodedBytes > 1_080_000_000L)
+                throw new IOException("PNG expansion limit exceeded");
+              if (produced == 0 && !pixelsStream.needsInput() && !pixelsStream.finished())
+                throw new IOException("Invalid PNG compressed stream");
+            }
+            if (pixelsStream.finished() && pixelsStream.getRemaining() != 0)
+              throw new IOException("Extra PNG compressed data");
+          } catch (DataFormatException e) {
+            throw new IOException("Invalid PNG compressed pixels", e);
+          }
+        }
         left -= count;
       }
       if ((in.readInt() & 0xffffffffL) != crc.getValue())
@@ -56,7 +88,8 @@ final class ImageContainer {
       remaining -= length + 12;
       if (name.equals("IDAT")) pixels = true;
       if (name.equals("IEND")) {
-        if (length != 0 || !pixels || remaining != 0) throw new IOException("Invalid PNG end");
+        if (length != 0 || !pixels || !pixelsStream.finished() || remaining != 0)
+          throw new IOException("Invalid PNG end");
         return;
       }
     }

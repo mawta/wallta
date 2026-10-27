@@ -2,6 +2,8 @@ package app.wallta
 
 import android.graphics.BitmapFactory
 import android.graphics.Bitmap
+import android.graphics.ImageDecoder
+import android.os.Build
 import java.io.File
 
 internal object LanImageValidator {
@@ -22,7 +24,19 @@ internal object LanImageValidator {
             inPreferredConfig = Bitmap.Config.ARGB_8888
         }
         // Header parsing alone does not verify the compressed pixel stream.
-        val decoded = BitmapFactory.decodeFile(file.absolutePath, options)
+        val decoded = try {
+            if (Build.VERSION.SDK_INT >= 28) {
+                ImageDecoder.decodeBitmap(ImageDecoder.createSource(file)) { decoder, _, _ ->
+                    decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+                    decoder.setTargetSampleSize(sample)
+                    decoder.setOnPartialImageListener { false }
+                }
+            } else BitmapFactory.decodeFile(file.absolutePath, options)
+        } catch (e: java.io.IOException) {
+            throw IllegalArgumentException("Image pixel data cannot be decoded", e)
+        } catch (e: OutOfMemoryError) {
+            throw IllegalArgumentException("Not enough memory to validate this image", e)
+        }
         requireNotNull(decoded) { "Image pixel data cannot be decoded" }
         decoded.recycle()
         return bounds.outMimeType

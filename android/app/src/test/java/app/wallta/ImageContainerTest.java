@@ -3,9 +3,11 @@ package app.wallta;
 import static org.junit.Assert.*;
 
 import java.io.*;
+import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.util.Arrays;
 import java.util.Base64;
+import java.util.zip.CRC32;
 import org.junit.Test;
 
 public class ImageContainerTest {
@@ -36,11 +38,45 @@ public class ImageContainerTest {
   }
 
   @Test
+  public void pngRejectsBrokenCompressedPixelsEvenWithValidChunkCrc() throws Exception {
+    byte[] png = png();
+    // This fixture's IDAT starts at byte 37; payload starts at byte 41.
+    int length = ByteBuffer.wrap(png, 33, 4).getInt();
+    png[41] = 0;
+    CRC32 crc = new CRC32();
+    crc.update(png, 37, length + 4);
+    ByteBuffer.wrap(png, 41 + length, 4).putInt((int) crc.getValue());
+    assertThrows(IOException.class, () -> validate(png, "image/png"));
+  }
+
+  @Test
   public void jpegRequiresCompleteMainImageButAllowsMotionPhotoTrailer() throws Exception {
     // Synthetic framing: SOI, segment, SOS, entropy (escaped FF/restart), EOI, trailer.
     byte[] jpeg = {
-      (byte) 255, (byte) 216, (byte) 255, (byte) 224, 0, 4, 1, 2, (byte) 255, (byte) 218, 0, 2, 1,
-      (byte) 255, 0, 2, (byte) 255, (byte) 208, 3, (byte) 255, (byte) 217, 9, 8, 7
+      (byte) 255,
+      (byte) 216,
+      (byte) 255,
+      (byte) 224,
+      0,
+      4,
+      1,
+      2,
+      (byte) 255,
+      (byte) 218,
+      0,
+      2,
+      1,
+      (byte) 255,
+      0,
+      2,
+      (byte) 255,
+      (byte) 208,
+      3,
+      (byte) 255,
+      (byte) 217,
+      9,
+      8,
+      7
     };
     validate(jpeg, "image/jpeg");
     assertThrows(IOException.class, () -> validate(Arrays.copyOf(jpeg, 20), "image/jpeg"));
