@@ -19,6 +19,6 @@ Link có mã ngẫu nhiên riêng mỗi phiên. Ai có link trong thời gian ph
 - Windows: cho phép Wallta qua firewall trên mạng riêng khi hệ thống hỏi. Không cần mở trên mạng công cộng.
 - TV/điện thoại: giữ Wallta ở trước màn hình; tắt app hoặc đổi mạng cần tạo phiên mới.
 - Trình duyệt hỏi quyền mạng local: chỉ cấp quyền khi đúng địa chỉ IP/QR đang hiển thị trong Wallta.
-- Gửi lỗi giữa chừng: kiểm tra số ảnh đã nhận trong Wallta, lưu các ảnh đã gửi thành công rồi mở phiên mới cho phần còn lại để tránh gửi lặp.
+- Gửi lỗi giữa chừng: bấm **Gửi tiếp phần còn lại**. Trình duyệt chỉ thử lại từ ảnh chưa báo thành công. Nếu mất mạng ngay khi máy nhận đã lưu nhưng chưa trả lời, kiểm tra số ảnh nhận trước khi thử lại ảnh đó.
 
 Kiểm thử tự động dùng TCP loopback để xác nhận giao thức, giới hạn và cleanup. Khả năng đi qua Wi-Fi/firewall/firmware thực tế cần thử trên chính cặp thiết bị.

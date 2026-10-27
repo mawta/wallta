@@ -291,6 +291,8 @@ fn webdav_http_fixture(recursive: bool) -> (Vec<wallta_lib::models::MediaItem>, 
                 }
                 Err(error) => panic!("Fixture could not accept request: {error}"),
             };
+            // Winsock inherits nonblocking mode from the fixture listener.
+            socket.set_nonblocking(false).unwrap();
             socket
                 .set_read_timeout(Some(Duration::from_secs(5)))
                 .unwrap();

@@ -9,6 +9,7 @@ Giao diện React + TypeScript dùng chung; Windows chạy bằng Tauri/Rust, An
 ## Chức năng
 
 - Thư mục trên máy/USB, thư mục con; link ảnh, danh sách JSON và WebDAV/NAS.
+- Gửi / nhận ảnh điện thoại ↔ TV/PC qua QR/link trên cùng Wi-Fi, không cần key. [Cách chuyển ảnh](docs/local-transfer.md).
 - Google Drive công khai bằng API key; Drive riêng qua OAuth trên Windows hoặc relay HTTPS trên Android/TV.
 - Google Photos: TV dùng Ambient API; Windows nhập ảnh qua Picker API; Android dùng trình chọn ảnh hệ thống/cloud nếu thiết bị có nhà cung cấp tương ứng. Nhập ảnh tạo bộ ảnh local, không tự đồng bộ album.
 - Ngẫu nhiên dùng hết một vòng trước khi lặp, tuần tự, chọn ngày/khung giờ qua đêm, fit/fill/stretch, nền mờ, giới hạn cache và chỉ tải qua Wi-Fi.
@@ -42,7 +43,7 @@ URL tương đối được tính theo URL JSON. Link một ảnh cũng được
 
 ## Google và giới hạn nền tảng
 
-[Thiết lập Google](docs/setup-google.md) hướng dẫn API key, OAuth, Photos và [relay Laravel](relay/README.md). Chưa có credential Google đóng sẵn. Ambient yêu cầu quyền truy cập trong Google Photos Partner Program; Picker chỉ nhập các ảnh do người dùng chọn.
+[Thiết lập Google](docs/setup-google.md) hướng dẫn API key, OAuth, Photos và [relay Laravel](relay/README.md). Trong form thêm nguồn có mục **Cách kết nối · lấy API key / Client ID**. Chưa có credential Google đóng sẵn. Ambient yêu cầu quyền truy cập trong Google Photos Partner Program; Picker chỉ nhập các ảnh do người dùng chọn.
 
 Android đổi hình nền tĩnh theo lịch tối thiểu **15 phút**, có thể trễ do hệ thống tiết kiệm pin. Chu kỳ trình chiếu/screensaver được đặt riêng. Bật Wallta trong mục Screensaver của TV để chạy khi màn hình nghỉ.
 

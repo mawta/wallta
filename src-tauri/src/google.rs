@@ -353,6 +353,7 @@ fn connect(
         check_cancel(&session, deadline)?;
         match listener.accept() {
             Ok((mut stream, _)) => {
+                stream.set_nonblocking(false).map_err(|e| e.to_string())?;
                 let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
                 let mut bytes = [0u8; 16384];
                 let count = stream
