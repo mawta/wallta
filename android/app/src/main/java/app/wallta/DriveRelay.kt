@@ -63,10 +63,12 @@ class DriveRelay(private val store: StateStore) {
     private fun cleanupPending(j: JSONObject) {
         Net.cleanup {
             val relay = j.getString("relayUrl")
-            val cancelled = if (j.optString("deviceCode").isNotBlank()) runCatching {
+            if (j.optString("deviceCode").isNotBlank()) runCatching {
                 Net.bytes("$relay/api/pair", 1024 * 1024, method = "DELETE", body = JSONObject().put("deviceCode", j.getString("deviceCode")).toString())
-            }.isSuccess else false
-            if (!cancelled && j.optString("token").isNotBlank()) Net.bytes("$relay/api/connection", 1024 * 1024, mapOf("Authorization" to "Bearer ${j.getString("token")}"), "DELETE")
+            }
+            // Pair TTL may expire while its issued connection remains valid.
+            // Deleting an already-revoked capability can return 401 and is harmless.
+            if (j.optString("token").isNotBlank()) runCatching { Net.bytes("$relay/api/connection", 1024 * 1024, mapOf("Authorization" to "Bearer ${j.getString("token")}"), "DELETE") }
         }
     }
     private fun persistOrCleanup(id: String, value: JSONObject): JSONObject {

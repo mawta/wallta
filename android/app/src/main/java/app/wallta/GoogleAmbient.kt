@@ -23,7 +23,7 @@ class GoogleAmbient(private val context: Context, private val store: StateStore 
         val request = UUID.randomUUID().toString(); val name = args.optString("displayName", "Wallta TV").take(100).ifBlank { "Wallta TV" }
         cancel(id)
         val j = store.beginPending("google", id, JSONObject().put("phase", "starting").put("clientId", client).put("clientSecret", args.optString("clientSecret")).put("requestId", request).put("displayName", name))
-        val data = Net.json("https://oauth2.googleapis.com/device/code", method = "POST", body = JSONObject().put("client_id", client).put("scope", "profile https://www.googleapis.com/auth/photosambient.mediaitems").put("state", JSONObject().put("requestId", request).put("displayName", name).toString()), tag = j.getString("nonce"))
+        val data = Net.form("https://oauth2.googleapis.com/device/code", mapOf("client_id" to client, "scope" to "profile https://www.googleapis.com/auth/photosambient.mediaitems", "state" to JSONObject().put("requestId", request).put("displayName", name).toString()), tag = j.getString("nonce"))
         j.put("phase", "authorizing")
             .put("deviceCode", data.getString("device_code")).put("userCode", data.getString("user_code")).put("verificationUrl", data.optString("verification_url", data.optString("verification_uri")))
             .put("interval", data.optInt("interval", 5).coerceAtLeast(5)).put("expires", System.currentTimeMillis() + data.optLong("expires_in", 1800) * 1000).put("nextPoll", System.currentTimeMillis() + data.optInt("interval", 5).coerceAtLeast(5) * 1000)
