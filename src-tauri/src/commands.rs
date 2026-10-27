@@ -597,9 +597,15 @@ impl Engine {
         storage::reconcile_catalogs(&mut runtime.persistent, &state.sources, &self.store.cache);
         runtime.media.clear();
         self.store.save_runtime(&runtime.persistent)?;
+        let previous_sources = runtime.state.sources.clone();
         runtime.state = state;
         runtime.next_due = Instant::now();
         self.persist_cache(&mut runtime)?;
+        crate::google::cleanup_obsolete_imports(
+            &self.store.root,
+            &previous_sources,
+            &runtime.state.sources,
+        );
         Ok(storage::public_state(&mut runtime.state))
     }
 }
@@ -607,6 +613,41 @@ impl Engine {
 #[cfg(test)]
 mod update_install_tests {
     use super::*;
+
+    #[test]
+    fn canceled_or_rejected_photos_edit_does_not_clean_imports() {
+        let root = tempfile::tempdir().unwrap();
+        let old = root.path().join("google-import").join("old");
+        let new = root.path().join("google-import").join("new");
+        fs::create_dir_all(&old).unwrap();
+        fs::create_dir_all(&new).unwrap();
+        let engine =
+            Engine::new(Store::new(root.path().into(), root.path().join("cache")).unwrap())
+                .unwrap();
+        let mut state = AppState::default();
+        state.sources.push(
+            serde_json::from_value(
+                serde_json::json!({"id":"photos", "name":"Photos", "kind":"local", "location":old}),
+            )
+            .unwrap(),
+        );
+        engine.save_state(state).unwrap();
+        let mut canceled = engine.snapshot().unwrap();
+        canceled.sources[0].location = new.to_string_lossy().into_owned();
+        drop(canceled);
+        assert!(old.is_dir());
+        let mut rejected = engine.snapshot().unwrap();
+        rejected.sources[0].location = new.to_string_lossy().into_owned();
+        rejected.sources[0].name.clear();
+        assert!(engine.save_state(rejected).is_err());
+        assert!(old.is_dir());
+        assert!(new.is_dir());
+        let mut accepted = engine.snapshot().unwrap();
+        accepted.sources[0].location = new.to_string_lossy().into_owned();
+        engine.save_state(accepted).unwrap();
+        assert!(!old.exists());
+        assert!(new.is_dir());
+    }
 
     #[test]
     fn disabled_connected_drive_can_be_saved_before_folder_selection_and_after_restart() {

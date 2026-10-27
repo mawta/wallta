@@ -590,6 +590,62 @@ fn can_discard_import(
             .iter()
             .any(|source| std::path::Path::new(&source.location) == directory)
 }
+
+/// Remove only imports formerly referenced by saved sources, after a successful save.
+/// Cleanup failures must not turn a durable connection update into a failed save.
+pub(crate) fn cleanup_obsolete_imports(
+    root: &std::path::Path,
+    before: &[Source],
+    after: &[Source],
+) {
+    let Ok(app_root) = root.canonicalize() else {
+        return;
+    };
+    let import_path = app_root.join("google-import");
+    let Ok(import_metadata) = std::fs::symlink_metadata(&import_path) else {
+        return;
+    };
+    if !import_metadata.is_dir() || import_metadata.file_type().is_symlink() {
+        return;
+    }
+    let Ok(import_root) = import_path.canonicalize() else {
+        return;
+    };
+    if !import_root.is_absolute() || import_root.parent() != Some(app_root.as_path()) {
+        return;
+    }
+    let mut references = Vec::new();
+    for source in after {
+        match std::path::Path::new(&source.location).canonicalize() {
+            Ok(path) => references.push(path),
+            // An unresolved local alias may still refer to a candidate. Retain data if uncertain.
+            Err(_) if source.kind == "local" => return,
+            Err(_) => (),
+        }
+    }
+    for source in before.iter().filter(|source| source.kind == "local") {
+        let Ok(target) = std::path::Path::new(&source.location).canonicalize() else {
+            continue;
+        };
+        if !target.is_absolute()
+            || target.parent() != Some(import_root.as_path())
+            || references
+                .iter()
+                .any(|reference| reference.starts_with(&target) || target.starts_with(reference))
+        {
+            continue;
+        }
+        // Recheck the absolute resolved target immediately before the recursive deletion.
+        if import_path.canonicalize().ok().as_ref() != Some(&import_root)
+            || target.canonicalize().ok().as_ref() != Some(&target)
+            || !std::fs::symlink_metadata(&target)
+                .is_ok_and(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink())
+        {
+            continue;
+        }
+        let _ = std::fs::remove_dir_all(&target);
+    }
+}
 fn import_picker(
     client: &reqwest::blocking::Client,
     session: &Session,
@@ -839,6 +895,76 @@ pub async fn google_disconnect(source_id: String) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn photo_source(id: &str, location: &std::path::Path) -> Source {
+        serde_json::from_value(json!({"id":id,"name":"Photos","kind":"local","location":location,"google":{"provider":"photos","connected":true}})).unwrap()
+    }
+    #[test]
+    fn saved_reselection_cleans_only_obsolete_import_locations() {
+        let root = tempfile::tempdir().unwrap();
+        let import_root = root.path().join("google-import");
+        let old = import_root.join("old");
+        let new = import_root.join("new");
+        let pending = import_root.join("pending");
+        for directory in [&old, &new, &pending] {
+            std::fs::create_dir_all(directory).unwrap();
+            std::fs::write(directory.join("photo.jpg"), b"imported-image").unwrap();
+        }
+        cleanup_obsolete_imports(
+            root.path(),
+            &[photo_source("photos", &old)],
+            &[photo_source("photos", &new)],
+        );
+        assert!(!old.exists());
+        assert!(new.is_dir());
+        assert!(pending.is_dir());
+        assert_eq!(
+            std::fs::read(new.join("photo.jpg")).unwrap(),
+            b"imported-image"
+        );
+        assert_eq!(
+            std::fs::read(pending.join("photo.jpg")).unwrap(),
+            b"imported-image"
+        );
+    }
+    #[test]
+    fn cleanup_preserves_disabled_alias_references_and_arbitrary_local_folders() {
+        let root = tempfile::tempdir().unwrap();
+        let import_root = root.path().join("google-import");
+        let old = import_root.join("old");
+        let new = import_root.join("new");
+        let arbitrary = root.path().join("personal-photos");
+        for directory in [&old, &new, &arbitrary] {
+            std::fs::create_dir_all(directory).unwrap();
+        }
+        let alias = new.join("..").join("old");
+        let mut referenced = photo_source("disabled", &alias);
+        referenced.enabled = false;
+        cleanup_obsolete_imports(
+            root.path(),
+            &[
+                photo_source("photos", &old),
+                photo_source("personal", &arbitrary),
+            ],
+            &[photo_source("photos", &new), referenced],
+        );
+        assert!(old.is_dir());
+        assert!(arbitrary.is_dir());
+    }
+    #[cfg(unix)]
+    #[test]
+    fn cleanup_preserves_symlink_alias_references() {
+        let root = tempfile::tempdir().unwrap();
+        let old = root.path().join("google-import").join("old");
+        std::fs::create_dir_all(&old).unwrap();
+        let alias = root.path().join("alias");
+        std::os::unix::fs::symlink(&old, &alias).unwrap();
+        cleanup_obsolete_imports(
+            root.path(),
+            &[photo_source("photos", &old)],
+            &[photo_source("alias", &alias)],
+        );
+        assert!(old.is_dir());
+    }
     #[test]
     fn photos_authorization_requests_email_identity_and_picker_access() {
         let photos: Vec<_> = authorization_scope("photos").split_whitespace().collect();
