@@ -11,6 +11,7 @@ Giao diện React + TypeScript dùng chung; Windows chạy bằng Tauri/Rust, An
 - Thư mục trên máy/USB, thư mục con; link ảnh, danh sách JSON và WebDAV/NAS.
 - Gửi / nhận ảnh điện thoại ↔ TV/PC qua QR/link trên cùng Wi-Fi, không cần key. [Cách chuyển ảnh](docs/local-transfer.md).
 - Google Drive công khai bằng API key; Drive riêng qua OAuth trên Windows hoặc relay HTTPS trên Android/TV.
+- Windows: lưu tài khoản Drive trước, chọn/đổi thư mục trên nguồn đã lưu; Lưu & áp dụng đổi ảnh ngay và bật tự đổi. Ghi nhớ tài khoản, thư mục và tùy chọn khởi động cùng Windows.
 - Google Photos: TV dùng Ambient API; Windows nhập ảnh qua Picker API; Android dùng trình chọn ảnh hệ thống/cloud nếu thiết bị có nhà cung cấp tương ứng. Nhập ảnh tạo bộ ảnh local, không tự đồng bộ album.
 - Ngẫu nhiên dùng hết một vòng trước khi lặp, tuần tự, chọn ngày/khung giờ qua đêm, fit/fill/stretch, nền mờ, giới hạn cache và chỉ tải qua Wi-Fi.
 - Windows có khay hệ thống, khởi động cùng máy. Android có WorkManager và TV screensaver. Đồng hồ hiển thị trong trình chiếu/screensaver.

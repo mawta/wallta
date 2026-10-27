@@ -1,4 +1,5 @@
-import type { SourceKind } from './types';
+import type { Source, SourceKind } from './types';
+import { uuid } from './compat';
 
 export interface GoogleStatus {
   account?: string;
@@ -10,6 +11,14 @@ export interface GoogleStatus {
   message?: string;
   location?: string;
   sourceKind?: SourceKind;
+}
+export function googleConnectionChanges(source: Source, next: GoogleStatus): Partial<Source> {
+  const provider = source.kind === 'drive' ? 'drive' : 'photos';
+  return { location: next.location || (provider === 'drive' ? '' : source.location), kind: next.sourceKind || source.kind,
+    name: source.name || (provider === 'drive' ? 'Google Drive' : 'Google Photos'),
+    google: { provider, connected: true, connectionId: uuid(), account: next.account,
+      selectionName: next.selectionName || (provider === 'photos' && next.sourceKind === 'local' ? 'Bộ ảnh đã nhập' : undefined) },
+  };
 }
 export function googlePollDelay(seconds?: number): number {
   return Number.isFinite(seconds) && seconds! >= 1 ? seconds! * 1000 : 5000;

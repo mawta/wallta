@@ -85,3 +85,12 @@ Android mở trình chọn ảnh hệ thống, dùng ACTION_OPEN_DOCUMENT trên 
 ## Bảo quản credential
 
 Không đưa secret vào manifest JSON, URL hoặc Git. Frontend không nhận lại credential đã lưu. Các ô để trống khi chỉnh sửa giữ credential cũ nếu trường bị bỏ qua; chuỗi rỗng gửi rõ ràng sẽ xóa credential. Nguồn mới phải lưu thành công mới sử dụng quyền OAuth đang chờ. Khóa APP_KEY relay cần lưu bền và sao lưu kín; đổi khóa làm token mã hóa cũ không đọc được.
+# Chọn và đổi nguồn đã lưu
+
+Windows: kết nối Google Drive → chọn thư mục → **Lưu & áp dụng**. Có thể bấm **Lưu nguồn** trước khi chọn thư mục; nguồn hiện **Chưa chọn thư mục**. Sau đó vào **Nguồn ảnh → Chọn / đổi thư mục**, không cần tạo nguồn hay đăng nhập lại khi quyền vẫn còn hiệu lực.
+
+**Lưu & áp dụng** chọn ảnh từ chính thư mục đó và bật tự đổi. Tùy chọn **Khởi động cùng Windows** nằm ngay trong form và có thể đổi ở Cài đặt. Các nguồn khác đang bật vẫn tham gia vòng đổi ảnh. Tổng quan hiện nhà cung cấp, tài khoản và thư mục của ảnh hiện tại; thẻ nguồn phân biệt **Đang hiển thị**, **Đã bật** và **Đã tắt**.
+
+Google Photos trên Windows lưu bản sao bộ ảnh đã chọn và giữ nhãn Google Photos sau khi nhập. **Chọn lại ảnh** trên nguồn đã lưu để thay bộ ảnh. Hủy lần chọn mới giữ nguyên bộ ảnh cũ. Không tự theo dõi ảnh mới trong album Google Photos có sẵn; cần tính năng này hãy dùng thư mục Drive.
+
+Android/TV Drive vẫn chọn link thư mục trước khi cấp quyền relay. TV Photos dùng album qua Ambient khi project đã được Google cấp quyền.

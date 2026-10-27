@@ -2,9 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import QRCode from 'qrcode';
 import { ArrowUpRight, Check, LoaderCircle } from 'lucide-react';
 import { callNative, errorMessage, isAndroid, isNative } from '../lib/native';
-import { googlePollDelay, googleVerificationUrl, type GoogleStatus } from '../lib/google';
+import { googleConnectionChanges, googlePollDelay, googleVerificationUrl, type GoogleStatus } from '../lib/google';
 import type { Source } from '../lib/types';
-import { uuid } from '../lib/compat';
 
 const startingRequests = new Map<string, symbol>();
 
@@ -20,14 +19,9 @@ export function GoogleConnect({ source, onConnected }: { source: Source; onConne
   useEffect(() => { active.current = true; return () => { active.current = false; }; }, []);
   const relay = source.kind === 'drive' && isAndroid();
   const androidPhotos = source.kind === 'photos' && isAndroid();
-  const connected = (next: GoogleStatus) => onConnected({
-    location: next.location || source.location, kind: next.sourceKind || source.kind,
-    name: source.name || (source.kind === 'drive' ? 'Google Drive' : 'Google Photos'),
-    google: { provider: source.kind === 'drive' ? 'drive' : 'photos', connected: true,
-      connectionId: uuid(),
-      account: next.account,
-      selectionName: next.selectionName || source.google?.selectionName || (source.kind === 'photos' && next.sourceKind === 'local' ? 'Bộ ảnh đã nhập' : undefined) },
-  });
+  const connected = (next: GoogleStatus) => onConnected(googleConnectionChanges(source, next));
+  const connectedRef = useRef(connected);
+  connectedRef.current = connected;
   const url = googleVerificationUrl(status?.verificationUrl, relay ? relayUrl : undefined);
   useEffect(() => {
     let cancelled = false;
@@ -42,12 +36,12 @@ export function GoogleConnect({ source, onConnected }: { source: Source; onConne
         const next = await callNative<GoogleStatus>('google_poll', { sourceId: source.id });
         if (!active.current) return;
         setStatus(next);
-        if (next.phase === 'ready') connected(next);
+        if (next.phase === 'ready') connectedRef.current(next);
         if (next.phase === 'error') setError(next.message || 'Kết nối Google chưa hoàn tất.');
       } catch (err) { if (active.current) { setStatus(null); setError(errorMessage(err)); } }
     }, googlePollDelay(status.pollIntervalSeconds));
     return () => clearTimeout(timer);
-  }, [status, source.id, source.kind, source.location, onConnected]);
+  }, [status, source.id]);
   const begin = async () => {
     if (relay && !relayUrl.trim()) { setError('Nhập địa chỉ HTTPS của Wallta Drive Relay.'); return; }
     if (!relay && !androidPhotos && !clientId.trim()) { setError('Nhập OAuth Client ID.'); return; }
