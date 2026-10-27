@@ -73,6 +73,15 @@ class StateStore(private val context: Context) {
         incoming.put("current", root.optJSONObject("state")?.opt("current") ?: JSONObject.NULL)
         incoming.put("lastChanged", root.optJSONObject("state")?.opt("lastChanged") ?: JSONObject.NULL)
         root.put("state", incoming).put("revision", root.optLong("revision") + 1)
+        for (i in 0 until sources.length()) {
+            val source = sources.getJSONObject(i); val id = source.getString("id")
+            val type = if (source.optString("kind") == "photos") "google" else if (source.optString("kind") == "drive") "relay" else continue
+            val pending = root.optJSONObject("${type}Pending:$id") ?: continue
+            val location = if (type == "google") pending.optString("deviceId") else pending.optString("folder")
+            if (pending.optString("phase") == "ready" && source.optString("location") == location) {
+                pending.put("pending", false); root.put("$type:$id", pending); root.remove("${type}Pending:$id")
+            }
+        }
         write(root)
         this.state(true)
     }
@@ -82,6 +91,31 @@ class StateStore(private val context: Context) {
     }
     fun get(key: String): JSONObject? = synchronized(lock) { read().optJSONObject(key) }
     fun put(key: String, value: JSONObject?) = synchronized(lock) { val r = read(); if (value == null) r.remove(key) else r.put(key, value); write(r) }
+    fun beginPending(type: String, id: String, value: JSONObject): JSONObject = synchronized(lock) {
+        val root = read(); val now = System.currentTimeMillis()
+        val pending = root.keys().asSequence().filter { it.startsWith("googlePending:") || it.startsWith("relayPending:") }.toList()
+        pending.filter { now - (root.optJSONObject(it)?.optLong("createdAt") ?: 0) > 60 * 60 * 1000 }.forEach { root.remove(it) }
+        val remaining = root.keys().asSequence().filter { it.startsWith("googlePending:") || it.startsWith("relayPending:") }.sortedBy { root.getJSONObject(it).optLong("createdAt") }.toList()
+        remaining.take((remaining.size - 31).coerceAtLeast(0)).forEach { root.remove(it) }
+        value.put("pending", true).put("nonce", java.util.UUID.randomUUID().toString()).put("createdAt", now)
+        root.put("${type}Pending:$id", value); write(root); value
+    }
+    fun session(type: String, id: String, activeOnly: Boolean = false): JSONObject? = synchronized(lock) {
+        val root = read()
+        (if (activeOnly) null else root.optJSONObject("${type}Pending:$id")) ?: root.optJSONObject("$type:$id")
+    }
+    fun saveSession(type: String, id: String, value: JSONObject) = synchronized(lock) {
+        val root = read(); val key = if (value.optBoolean("pending")) "${type}Pending:$id" else "$type:$id"
+        check(root.optJSONObject(key)?.optString("nonce") == value.optString("nonce")) { "Google operation cancelled by a newer request" }
+        root.put(key, value); write(root)
+    }
+    fun removeSession(type: String, id: String, value: JSONObject) = synchronized(lock) {
+        val root = read(); val key = if (value.optBoolean("pending")) "${type}Pending:$id" else "$type:$id"
+        if (root.optJSONObject(key)?.optString("nonce") == value.optString("nonce")) { root.remove(key); write(root) }
+    }
+    fun takePending(type: String, id: String): JSONObject? = synchronized(lock) {
+        val root = read(); val key = "${type}Pending:$id"; val value = root.optJSONObject(key); root.remove(key); write(root); value
+    }
     fun setRunning(running: Boolean): JSONObject = synchronized(lock) { val s = state(); s.put("running", running); save(s) }
     private fun defaults() = JSONObject("""{"version":1,"sources":[],"settings":{"intervalSeconds":900,"slideshowSeconds":30,"order":"shuffle","fit":"fill","blurBackground":false,"autostart":false,"wifiOnly":false,"cacheLimitMb":256,"scheduleEnabled":false,"days":[0,1,2,3,4,5,6],"startTime":"07:00","endTime":"23:00","showClock":false},"running":false,"current":null,"lastChanged":null,"error":null}""")
 }

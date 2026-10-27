@@ -15,6 +15,7 @@ class WalltaBridge(private val activity: MainActivity, private val web: WebView)
     private val io = Executors.newFixedThreadPool(2)
     private val control = Executors.newSingleThreadExecutor()
     private val store = StateStore(activity.applicationContext)
+    private val authorizationIds = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
     @Volatile private var closed = false
     fun receive(message: String) {
         if (closed || message.length > 1024 * 1024) return
@@ -22,7 +23,7 @@ class WalltaBridge(private val activity: MainActivity, private val web: WebView)
         val id = request.optString("id"); if (id.length !in 1..128) return
         val command = request.optString("command"); val args = request.optJSONObject("args") ?: JSONObject()
         if (command == "pick_folder") { activity.runOnUiThread { activity.pickFolder { uri, error -> reply(id, error == null, error ?: uri) } }; return }
-        val executor = if (command in listOf("get_state", "save_state", "set_running", "get_capabilities")) control else io
+        val executor = if (command in listOf("get_state", "save_state", "set_running", "get_capabilities", "google_cancel")) control else io
         executor.execute {
             try {
                 val repo = MediaRepository(activity.applicationContext, store)
@@ -35,11 +36,12 @@ class WalltaBridge(private val activity: MainActivity, private val web: WebView)
                     "next_wallpaper" -> try { WallpaperEngine.apply(activity, true) } catch (e: Exception) { store.mutateState { it.put("error", e.message ?: "Wallpaper update failed") }; throw e }
                     "get_capabilities" -> capabilities()
                     "clear_cache" -> { repo.clear(); JSONObject.NULL }
-                    "google_begin" -> GoogleAmbient(activity, store).begin(args)
+                    "google_begin" -> { authorizationIds.add(args.getString("sourceId")); GoogleAmbient(activity, store).begin(args) }
                     "google_poll" -> GoogleAmbient(activity, store).poll(args.getString("sourceId"))
                     "google_disconnect" -> { GoogleAmbient(activity, store).disconnect(args.getString("sourceId")); JSONObject.NULL }
-                    "open_external" -> { val uri = Uri.parse(args.getString("url")); require(uri.scheme == "https" && !uri.host.isNullOrBlank() && uri.userInfo == null) { "Only HTTPS external links are supported" }; activity.runOnUiThread { runCatching { activity.startActivity(Intent(Intent.ACTION_VIEW, uri).addCategory(Intent.CATEGORY_BROWSABLE)) }.onFailure { reply(id, false, "No browser is installed on this device. Scan the QR code on your phone.") } }; JSONObject.NULL }
-                    "open_screensaver_settings" -> { activity.runOnUiThread { try { activity.startActivity(Intent(Settings.ACTION_DREAM_SETTINGS)) } catch (e: Exception) { reply(id, false, "This firmware hides Screensaver settings. Open TV Settings → Device Preferences → Screensaver and choose Wallta.") } }; JSONObject.NULL }
+                    "google_cancel" -> { GoogleAmbient(activity, store).cancel(args.getString("sourceId")); JSONObject.NULL }
+                    "open_external" -> { val uri = Uri.parse(args.getString("url")); require(uri.scheme == "https" && !uri.host.isNullOrBlank() && uri.userInfo == null) { "Only HTTPS external links are supported" }; activity.runOnUiThread { try { activity.startActivity(Intent(Intent.ACTION_VIEW, uri).addCategory(Intent.CATEGORY_BROWSABLE)); reply(id, true, null) } catch (e: Exception) { reply(id, false, "No browser is installed on this device. Scan the QR code on your phone.") } }; return@execute }
+                    "open_screensaver_settings" -> { activity.runOnUiThread { try { activity.startActivity(Intent(Settings.ACTION_DREAM_SETTINGS)); reply(id, true, null) } catch (e: Exception) { reply(id, false, "This firmware hides Screensaver settings. Open TV Settings → Device Preferences → Screensaver and choose Wallta.") } }; return@execute }
                     else -> error("Unknown native command: $command")
                 }
                 reply(id, true, value)
@@ -60,5 +62,5 @@ class WalltaBridge(private val activity: MainActivity, private val web: WebView)
         val json = when (value) { null, JSONObject.NULL -> "null"; is JSONObject, is JSONArray -> value.toString(); is Number, is Boolean -> value.toString(); else -> JSONObject.quote(value.toString()) }
         activity.runOnUiThread { if (!closed) web.evaluateJavascript("window.__walltaReply&&window.__walltaReply(${JSONObject.quote(id)},$success,$json)", null) }
     }
-    fun close() { closed = true; io.shutdownNow(); control.shutdownNow() }
+    fun close() { closed = true; authorizationIds.forEach { GoogleAmbient(activity, store).cancel(it) }; io.shutdownNow(); control.shutdownNow() }
 }

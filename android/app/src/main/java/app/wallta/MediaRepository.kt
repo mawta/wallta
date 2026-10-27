@@ -138,6 +138,9 @@ class MediaRepository(private val context: Context, private val store: StateStor
     fun cacheFile(id: String): File { require(id.matches(Regex("[a-f0-9]{64}"))); return File(dir, "$id.img") }
     fun image(media: Media): File {
         val target = cacheFile(media.id)
+        val state = store.state(); val revision = store.revision(); val cacheEpoch = store.get("cacheEpoch")?.optLong("value") ?: 0L
+        val sources = state.getJSONArray("sources")
+        require((0 until sources.length()).any { sources.getJSONObject(it).optString("id") == media.sourceId && sources.getJSONObject(it).optBoolean("enabled", true) }) { "Source removed or disabled" }
         if (media.photos) {
             require(networkAllowed(store.state().getJSONObject("settings"))) { "Google Photos cannot be displayed offline" }
             require(store.get("google:${media.sourceId}")?.optString("phase") == "ready") { "Google Photos disconnected" }
@@ -145,14 +148,13 @@ class MediaRepository(private val context: Context, private val store: StateStor
             if (System.currentTimeMillis() - cachedAt > 60 * 60 * 1000) target.delete()
         }
         if (target.exists()) { target.setLastModified(System.currentTimeMillis()); return target }
-        val state = store.state(); val sources = state.getJSONArray("sources")
-        require((0 until sources.length()).any { sources.getJSONObject(it).optString("id") == media.sourceId && sources.getJSONObject(it).optBoolean("enabled", true) }) { "Source removed or disabled" }
         val bytes = if (media.url.startsWith("content://")) context.contentResolver.openInputStream(Uri.parse(media.url))!!.use { Net.bounded(it, 25 * 1024 * 1024) }
         else { require(networkAllowed(state.getJSONObject("settings"))) { "Network unavailable or Wi-Fi required" }; Net.bytes(media.url, 25 * 1024 * 1024, headers(media)) }
         val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
         android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
         require(bounds.outWidth > 0 && bounds.outHeight > 0 && bounds.outWidth.toLong() * bounds.outHeight <= 120_000_000) { "Invalid or oversized image" }
         synchronized(StateStore.lock) {
+            check(store.revision() == revision && (store.get("cacheEpoch")?.optLong("value") ?: 0L) == cacheEpoch) { "Image operation cancelled by newer state or cache clear" }
             val temp = File.createTempFile("image-", ".tmp", dir)
             try { temp.writeBytes(bytes); require(temp.renameTo(target)) { "Cannot cache image" } } finally { temp.delete() }
             val ledger = store.get("cacheOwners") ?: JSONObject(); ledger.put(media.id, JSONObject().put("source", media.sourceId).put("photos", media.photos).put("createdAt", System.currentTimeMillis())); store.put("cacheOwners", ledger)
@@ -171,7 +173,7 @@ class MediaRepository(private val context: Context, private val store: StateStor
         ledger.keys().asSequence().toList().filter { ledger.getJSONObject(it).optString("source") == source }.forEach { cacheFile(it).delete(); ledger.remove(it) }
         store.put("cacheOwners", ledger); store.put("catalog:$source", null)
     }
-    fun clear() = synchronized(StateStore.lock) { dir.listFiles()?.forEach { it.delete() }; store.put("cacheOwners", null) }
+    fun clear() = synchronized(StateStore.lock) { dir.listFiles()?.forEach { it.delete() }; store.put("cacheOwners", null); store.put("cacheEpoch", JSONObject().put("value", (store.get("cacheEpoch")?.optLong("value") ?: 0L) + 1)) }
     fun cleanup(old: JSONObject, updated: JSONObject) {
         val a = updated.getJSONArray("sources"); val now = (0 until a.length()).map { a.getJSONObject(it) }
         val b = old.getJSONArray("sources")
