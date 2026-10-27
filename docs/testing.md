@@ -6,18 +6,18 @@
 
 | Phạm vi | Kết quả / bằng chứng |
 |---|---|
-| React/TypeScript | 17 Vitest tests đạt, production Vite build đạt |
+| React/TypeScript | 18 Vitest tests đạt, production Vite build đạt |
 | Thao tác trình duyệt | Thêm nguồn JSON thật 2 ảnh, Next, trình chiếu/ArrowRight/Escape, lưu lịch 300 giây và tải lại đều đạt |
 | Bố cục | Đã xem ảnh chụp desktop 1440×900, mobile 390×844 và TV 1920×1080; mobile không tràn ngang |
 | Bàn phím/D-pad web | Đổi mục sidebar bằng mũi tên; rời input bằng Up/Down và select bằng Left/Right; focus hiển thị |
 | Lỗi lưu/hủy OAuth UI | Mounted React regression tái hiện đóng lúc đang lưu, sau sửa không đóng qua nút/Escape cho tới khi xong |
-| Windows native | CI chạy Rust selection/schedule/parsers/cacheownership/offline/cancellation và OAuth PKCE/state; NSIS build đã thành công. Lượt cuối được ghi trong GitHub Actions |
+| Windows native | 31 Rust tests đạt trên CI: selection/schedule/parsers/WebDAV recursive/cache ownership/offline/cancellation và OAuth PKCE/state; NSIS build thành công |
 | Android native | CI compile Kotlin, chạy policy JVM tests và tạo debug APK. Phần hardware cần kiểm tra bên dưới |
 | Relay Laravel | 10 tests / 62 assertions đạt trên PHP 8.4, Google HTTP fake; PKCE/state, credential mã hóa, scope thư mục, refresh/disconnect, cancel và limiter riêng |
 | Relay race review | Hai callback đồng thời: bên thua 410; hủy khi token exchange đang chạy: callback 410, không tạo lại pair; alias root chuyển ID chuẩn |
 | Dependency audit | npm và Composer audit không tìm thấy advisory tại thời điểm chạy 27/10/2026 |
 
-Test trước sửa đã quan sát được lỗi: pause bị chặn bởi download; preview ghi sau pause; WebDAV bỏ qua thư mục con; đóng nguồn trong lúc lưu; relay dùng chung rate limit; chưa có cancel endpoint. Lịch sử commit và log CI giữ bằng chứng RED/GREEN.
+Test trước sửa đã quan sát được lỗi: pause bị chặn bởi download; preview ghi sau pause; WebDAV bỏ qua thư mục con; đóng nguồn trong lúc lưu; phản hồi Google đến sau khi đóng; relay dùng chung rate limit; chưa có cancel endpoint. Lịch sử commit và log CI giữ bằng chứng RED/GREEN. Một số test JVM Android được viết trước mã sửa nhưng không chạy được bước RED tại máy này do thiếu JDK/SDK; kết quả GREEN được kiểm tra trên CI.
 
 Ảnh chụp, fixture và bộ cài nằm ở `output/`, được Git bỏ qua. Không dùng ảnh giả để báo số lượng thư viện; khung cảnh SVG khi chưa có ảnh được ghi rõ là minh họa. Ảnh kiểm thử được tạo từ SVG của dự án.
 
