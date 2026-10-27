@@ -5,6 +5,8 @@ pub mod models;
 pub mod providers;
 pub mod rotation;
 pub mod storage;
+mod update_policy;
+mod updates;
 pub mod wallpaper;
 
 use std::sync::Arc;
@@ -16,7 +18,10 @@ use tauri::{
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    #[cfg(windows)]
+    let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
+    builder
         .plugin(tauri_plugin_single_instance::init(|app, args, _| {
             if !args.iter().any(|a| a == "--background") {
                 if let Some(window) = app.get_webview_window("main") {
@@ -34,6 +39,9 @@ pub fn run() {
             .map_err(std::io::Error::other)?;
             let engine = Arc::new(commands::Engine::new(store).map_err(std::io::Error::other)?);
             app.manage(engine.clone());
+            app.manage(Arc::new(updates::UpdateManager::new(
+                engine.store.root.clone(),
+            )));
             app.manage(Arc::new(
                 lan::LanManager::new(&engine.store.root).map_err(std::io::Error::other)?,
             ));
@@ -119,7 +127,12 @@ pub fn run() {
             google::google_begin,
             google::google_poll,
             google::google_cancel,
-            google::google_disconnect
+            google::google_disconnect,
+            updates::update_status,
+            updates::update_check,
+            updates::update_download,
+            updates::update_cancel,
+            updates::update_install
         ])
         .build(tauri::generate_context!())
         .expect("Wallta failed to start")

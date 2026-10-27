@@ -2,11 +2,14 @@ import { ArrowUpRight, HardDrive, Monitor, ShieldCheck, Trash2, Info, Play } fro
 import { callNative, isNative } from '../lib/native';
 import { SectionTitle, SettingRow, Toggle } from '../components/ui';
 import type { AppState, Capabilities } from '../lib/types';
+import type { UpdatesController } from '../lib/updates';
+import { AppUpdates } from '../components/AppUpdates';
 
-export function SettingsPage({ state, capabilities, onSave, busy, perform, notify }: { state: AppState; capabilities: Capabilities | null; onSave: (state: AppState) => Promise<unknown>; busy: boolean; perform: (fn: () => Promise<void>) => Promise<unknown>; notify: (text: string, error?: boolean) => void }) {
+export function SettingsPage({ state, capabilities, onSave, busy, perform, notify, updates }: { state: AppState; capabilities: Capabilities | null; onSave: (state: AppState) => Promise<unknown>; busy: boolean; perform: (fn: () => Promise<void>) => Promise<unknown>; notify: (text: string, error?: boolean) => void; updates: UpdatesController }) {
   const update = (settings: Partial<AppState['settings']>) => void onSave({ ...state, settings: { ...state.settings, ...settings } });
   return <>
     <SectionTitle title="Cài đặt" />
+    <AppUpdates updates={updates} busy={busy} perform={perform} />
     <section className="panel settings-panel"><h3><Monitor size={18} /> Thiết bị</h3>
       <SettingRow title="Khởi động cùng thiết bị" description={capabilities?.platform === 'windows' ? 'Chạy trong khay khi đăng nhập.' : 'Khôi phục lịch sau khi khởi động lại.'}><Toggle checked={state.settings.autostart} label="Khởi động cùng thiết bị" onChange={() => update({ autostart: !state.settings.autostart })} disabled={busy || !isNative()} /></SettingRow>
       <SettingRow title="Chỉ tải ảnh qua Wi-Fi"><Toggle checked={state.settings.wifiOnly} label="Chỉ tải ảnh qua Wi-Fi" onChange={() => update({ wifiOnly: !state.settings.wifiOnly })} disabled={busy || !capabilities?.platform.startsWith('android')} /></SettingRow>
@@ -17,7 +20,7 @@ export function SettingsPage({ state, capabilities, onSave, busy, perform, notif
       <SettingRow title="Dọn ảnh đã tải" description="Giữ ảnh gốc; tải lại cache khi cần."><button className="button secondary" disabled={busy || !isNative()} onClick={() => void perform(async () => { await callNative('clear_cache'); notify('Đã dọn ảnh trong bộ nhớ đệm.'); })}><Trash2 size={15} />Dọn bộ nhớ</button></SettingRow>
     </section>
     <section className="panel settings-panel"><h3><ShieldCheck size={18} /> Khả năng thiết bị</h3><div className="capability-grid"><div><span className="muted">Nền tảng</span><strong>{capabilities?.platform === 'browser' ? 'Trình duyệt · Xem trước' : capabilities?.platform || 'Đang kiểm tra…'}</strong></div><div><span className="muted">Hình nền hệ thống</span><strong>{capabilities?.wallpaper ? 'API khả dụng' : 'Không khả dụng'}</strong></div><div><span className="muted">Screensaver</span><strong>{capabilities?.screensaver ? 'Khả dụng' : 'Không khả dụng'}</strong></div></div>{capabilities?.notes.map(note => <p className="capability-note" key={note}><Info size={15} /><span>{note}</span></p>)}{capabilities?.platform === 'android-tv' && <p className="capability-note"><Info size={15} /><span>Nền Home tùy launcher. Áp dụng thử rồi về Home để kiểm tra.</span></p>}</section>
-    <div className="about-panel"><img src="./wallta.svg" alt="" /><div><strong>Wallta <span>0.1.1</span></strong></div><button className="icon-button" aria-label="Mở kho mã Wallta" onClick={() => void perform(async () => {
+    <div className="about-panel"><img src="./wallta.svg" alt="" /><div><strong>Wallta <span>{updates.status.currentVersion}</span></strong></div><button className="icon-button" aria-label="Mở kho mã Wallta" onClick={() => void perform(async () => {
       if (isNative()) await callNative('open_external', { url: 'https://github.com/mawta/wallta' });
       else window.open('https://github.com/mawta/wallta', '_blank', 'noopener,noreferrer');
     })}><ArrowUpRight size={20} /></button></div>

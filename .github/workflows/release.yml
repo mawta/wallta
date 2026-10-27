@@ -1,0 +1,209 @@
+name: Signed stable release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing stable tag, for example v0.1.2'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: stable-release
+  cancel-in-progress: false
+
+env:
+  RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+
+jobs:
+  validate:
+    if: github.repository == 'mawta/wallta'
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      version: ${{ steps.version.outputs.version }}
+      versionCode: ${{ steps.version.outputs.versionCode }}
+      sha: ${{ steps.commit.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: node --test scripts/release.test.mjs
+      - run: node scripts/release.mjs privacy
+      - id: version
+        run: node scripts/release.mjs validate "$RELEASE_TAG"
+      - name: Require the checked-out commit to match the existing tag
+        id: commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag_sha="$(git rev-parse --verify "refs/tags/$RELEASE_TAG^{commit}")"
+          test "$tag_sha" = "$(git rev-parse HEAD)"
+          printf 'sha=%s\n' "$tag_sha" >> "$GITHUB_OUTPUT"
+      - run: npm ci
+      - run: npm test -- --run
+      - run: npm run build
+
+  windows:
+    needs: validate
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+      - run: npm ci
+      - run: npm test -- --run
+      - run: cargo test --locked --manifest-path src-tauri/Cargo.toml
+      - name: Build signed x64 NSIS updater installer
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        shell: pwsh
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY) -or [string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD)) { throw 'Both Tauri signing secrets are required' }
+          npm run tauri -- build --target x86_64-pc-windows-msvc --bundles nsis --config scripts/tauri.release.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Stage exactly one installer and signature
+        run: node scripts/release.mjs stage "$env:RELEASE_TAG" release-assets windows src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis
+      - uses: actions/upload-artifact@v4
+        with:
+          name: signed-windows-x64
+          path: release-assets/*
+          if-no-files-found: error
+          retention-days: 7
+
+  android:
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.14'
+      - run: npm ci
+      - run: npm test -- --run
+      - run: npm run build
+      - run: node scripts/prepare-android.mjs
+      - name: Decode private Android keystore
+        env:
+          WALLTA_ANDROID_KEYSTORE_BASE64: ${{ secrets.WALLTA_ANDROID_KEYSTORE_BASE64 }}
+          WALLTA_ANDROID_STORE_PASSWORD: ${{ secrets.WALLTA_ANDROID_STORE_PASSWORD }}
+          WALLTA_ANDROID_KEY_ALIAS: ${{ secrets.WALLTA_ANDROID_KEY_ALIAS }}
+          WALLTA_ANDROID_KEY_PASSWORD: ${{ secrets.WALLTA_ANDROID_KEY_PASSWORD }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import {writeFileSync} from 'node:fs';
+          import {join} from 'node:path';
+          for (const name of ['WALLTA_ANDROID_KEYSTORE_BASE64','WALLTA_ANDROID_STORE_PASSWORD','WALLTA_ANDROID_KEY_ALIAS','WALLTA_ANDROID_KEY_PASSWORD']) {
+            if (!process.env[name]?.trim()) throw new Error(`Missing required secret: ${name}`);
+          }
+          const value = process.env.WALLTA_ANDROID_KEYSTORE_BASE64;
+          if (!/^[A-Za-z0-9+/]+={0,2}$/.test(value) || value.length % 4) throw new Error('Invalid keystore encoding');
+          const path = join(process.env.RUNNER_TEMP,'wallta-release.jks');
+          writeFileSync(path,Buffer.from(value,'base64'),{mode:0o600,flag:'wx'});
+          writeFileSync(process.env.GITHUB_ENV,`WALLTA_ANDROID_KEYSTORE=${path}\n`,{flag:'a'});
+          NODE
+      - name: Test and assemble signed release APK
+        working-directory: android
+        env:
+          WALLTA_ANDROID_STORE_PASSWORD: ${{ secrets.WALLTA_ANDROID_STORE_PASSWORD }}
+          WALLTA_ANDROID_KEY_ALIAS: ${{ secrets.WALLTA_ANDROID_KEY_ALIAS }}
+          WALLTA_ANDROID_KEY_PASSWORD: ${{ secrets.WALLTA_ANDROID_KEY_PASSWORD }}
+        run: gradle --no-daemon testDebugUnitTest assembleRelease
+      - name: Verify APK signature and compiled identity
+        env:
+          EXPECTED_VERSION: ${{ needs.validate.outputs.version }}
+          EXPECTED_CODE: ${{ needs.validate.outputs.versionCode }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          apk=android/app/build/outputs/apk/release/app-release.apk
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose "$apk"
+          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging "$apk" > "$RUNNER_TEMP/wallta-apk-badging.txt"
+          node --input-type=module <<'NODE'
+          import {readFileSync} from 'node:fs';
+          import {join} from 'node:path';
+          const text = readFileSync(join(process.env.RUNNER_TEMP,'wallta-apk-badging.txt'),'utf8');
+          const match = text.match(/^package: name='([^']+)' versionCode='(\d+)' versionName='([^']+)'/m);
+          if (!match || match[1] !== 'app.wallta' || match[2] !== process.env.EXPECTED_CODE || match[3] !== process.env.EXPECTED_VERSION || !/^sdkVersion:'26'$/m.test(text)) throw new Error('Compiled APK identity does not match release');
+          NODE
+      - name: Stage exactly one signed APK
+        run: node scripts/release.mjs stage "$RELEASE_TAG" release-assets android android/app/build/outputs/apk/release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: signed-android-api26
+          path: release-assets/*
+          if-no-files-found: error
+          retention-days: 7
+      - name: Remove private keystore
+        if: always()
+        shell: bash
+        run: rm -f -- "$RUNNER_TEMP/wallta-release.jks"
+
+  publish:
+    needs: [validate, windows, android]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/download-artifact@v4
+        with:
+          name: signed-windows-x64
+          path: release-assets
+      - uses: actions/download-artifact@v4
+        with:
+          name: signed-android-api26
+          path: release-assets
+      - run: node --test scripts/release.test.mjs
+      - run: node scripts/release.mjs privacy
+      - name: Generate and verify manifest and complete checksums
+        run: node scripts/release.mjs generate "$RELEASE_TAG" release-assets
+      - name: Draft, upload, download and verify, then publish stable release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/release.mjs publish "$RELEASE_TAG" release-assets

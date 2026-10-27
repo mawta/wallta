@@ -1,7 +1,7 @@
 name: Android APK
 on:
   push:
-    branches: [main, feat/first-release]
+    branches: [main, feat/first-release, feat/in-app-updates]
   pull_request:
   workflow_dispatch:
 permissions:
@@ -16,6 +16,8 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - run: node --test scripts/release.test.mjs
+      - run: node scripts/release.mjs privacy
       - run: npm test -- --run
       - run: npm run build
       - run: node scripts/prepare-android.mjs

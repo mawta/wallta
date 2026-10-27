@@ -24,6 +24,7 @@ pub struct Engine {
     pub client: reqwest::blocking::Client,
     pub revision: AtomicU64,
     rotation: Mutex<()>,
+    mutation_gate: crate::update_policy::MutationGate,
 }
 #[derive(Clone)]
 pub struct Runtime {
@@ -34,6 +35,15 @@ pub struct Runtime {
     pub persistent: RuntimeState,
 }
 impl Engine {
+    /// Acquire only while holding the native state lock to await all prior saves.
+    pub(crate) fn begin_update_install(
+        &self,
+    ) -> Result<crate::update_policy::InstallBarrier<'_>, String> {
+        let _runtime = self.inner.lock().map_err(|e| e.to_string())?;
+        let barrier = self.mutation_gate.install()?;
+        self.revision.fetch_add(1, Ordering::SeqCst);
+        Ok(barrier)
+    }
     /// Resolve IDs through enabled local providers only; never treat caller values as paths.
     pub(crate) fn lan_exports(
         &self,
@@ -46,6 +56,7 @@ impl Engine {
             return Err("Select at most 50 unique local images.".into());
         }
         let runtime = self.inner.lock().map_err(|e| e.to_string())?;
+        self.mutation_gate.ensure_open()?;
         let mut resolved = Vec::new();
         for source in runtime
             .state
@@ -74,6 +85,7 @@ impl Engine {
     /// Append to the fresh native state while holding its lock. Do not restart or apply rotation.
     pub(crate) fn accept_lan_source(&self, path: &std::path::Path) -> Result<AppState, String> {
         let mut runtime = self.inner.lock().map_err(|e| e.to_string())?;
+        self.mutation_gate.ensure_open()?;
         if runtime.state.sources.len() >= 100 {
             return Err(
                 "At most 100 sources are supported. Remove a source before adding received images."
@@ -142,6 +154,7 @@ impl Engine {
             client: providers::client()?,
             revision: AtomicU64::new(0),
             rotation: Mutex::new(()),
+            mutation_gate: crate::update_policy::MutationGate::default(),
         })
     }
     pub fn snapshot(&self) -> Result<AppState, String> {
@@ -205,6 +218,7 @@ impl Engine {
         let mut persistent = snapshot.persistent;
         let (images, errors) = self.list(&snapshot.state, &mut persistent, revision);
         let mut runtime = self.inner.lock().map_err(|e| e.to_string())?;
+        self.mutation_gate.ensure_open()?;
         if self.revision.load(Ordering::SeqCst) != revision {
             return Ok(runtime.media.clone());
         }
@@ -216,10 +230,12 @@ impl Engine {
     }
     fn operation_snapshot(&self) -> Result<(Runtime, u64), String> {
         let runtime = self.inner.lock().map_err(|e| e.to_string())?;
+        self.mutation_gate.ensure_open()?;
         Ok((runtime.clone(), self.revision.load(Ordering::SeqCst)))
     }
     fn source_is_current(&self, runtime: &Runtime, source: &Source, revision: u64) -> bool {
-        self.revision.load(Ordering::SeqCst) == revision
+        self.mutation_gate.ensure_open().is_ok()
+            && self.revision.load(Ordering::SeqCst) == revision
             && runtime.state.sources.iter().any(|current| {
                 current.enabled
                     && current.id == source.id
@@ -434,6 +450,7 @@ impl Engine {
     }
     pub fn set_running(&self, running: bool) -> Result<AppState, String> {
         let mut runtime = self.inner.lock().map_err(|e| e.to_string())?;
+        self.mutation_gate.ensure_open()?;
         self.revision.fetch_add(1, Ordering::SeqCst);
         let mut next = runtime.state.clone();
         next.running = running;
@@ -489,6 +506,7 @@ impl Engine {
             return Err("At most 100 sources are supported.".into());
         }
         let mut runtime = self.inner.lock().map_err(|e| e.to_string())?;
+        self.mutation_gate.ensure_open()?;
         self.revision.fetch_add(1, Ordering::SeqCst);
         let mut ids = HashSet::new();
         for source in &mut state.sources {
@@ -548,9 +566,35 @@ impl Engine {
     }
 }
 
+#[cfg(test)]
+mod update_install_tests {
+    use super::*;
+
+    #[test]
+    fn installing_preserves_saved_state_and_rejects_mutations_until_failure() {
+        let root = tempfile::tempdir().unwrap();
+        let engine =
+            Engine::new(Store::new(root.path().into(), root.path().join("cache")).unwrap())
+                .unwrap();
+        engine.set_running(false).unwrap();
+        let before = fs::read(root.path().join("state.json")).unwrap();
+        let state = engine.snapshot().unwrap();
+        let barrier = engine.begin_update_install().unwrap();
+        assert!(engine.set_running(true).is_err());
+        assert!(engine.save_state(state).is_err());
+        assert!(engine.rotate(false).is_err());
+        assert_eq!(fs::read(root.path().join("state.json")).unwrap(), before);
+        drop(barrier);
+        assert!(engine.set_running(true).is_ok());
+    }
+}
+
 pub fn start_worker(app: tauri::AppHandle, engine: Arc<Engine>) {
     std::thread::spawn(move || loop {
         std::thread::sleep(Duration::from_secs(1));
+        if engine.mutation_gate.ensure_open().is_err() {
+            continue;
+        }
         let before = engine.snapshot().ok().map(|s| (s.last_changed, s.error));
         match engine.rotate(true) {
             Ok(state) => {
@@ -560,6 +604,9 @@ pub fn start_worker(app: tauri::AppHandle, engine: Arc<Engine>) {
             }
             Err(error) => {
                 if let Ok(mut runtime) = engine.inner.lock() {
+                    if engine.mutation_gate.ensure_open().is_err() {
+                        continue;
+                    }
                     runtime.state.error = Some(error);
                     runtime.next_due = Instant::now() + Duration::from_secs(30);
                 }
@@ -630,6 +677,7 @@ pub async fn clear_cache(engine: tauri::State<'_, Arc<Engine>>) -> Result<(), St
     let engine = engine.inner().clone();
     blocking(move || {
         let mut runtime = engine.inner.lock().map_err(|e| e.to_string())?;
+        engine.mutation_gate.ensure_open()?;
         engine.revision.fetch_add(1, Ordering::SeqCst);
         for entry in fs::read_dir(&engine.store.cache).map_err(|e| e.to_string())? {
             let entry = entry.map_err(|e| e.to_string())?;

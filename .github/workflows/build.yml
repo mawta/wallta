@@ -1,7 +1,7 @@
 name: Windows desktop
 on:
   push:
-    branches: [main, feat/first-release]
+    branches: [main, feat/first-release, feat/in-app-updates]
   pull_request:
   workflow_dispatch:
 permissions:
@@ -20,6 +20,8 @@ jobs:
         with:
           workspaces: src-tauri -> target
       - run: npm ci
+      - run: node --test scripts/release.test.mjs
+      - run: node scripts/release.mjs privacy
       - run: npm test -- --run
       - run: npm run build
       - run: cargo test --manifest-path src-tauri/Cargo.toml

@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { LayoutDashboard, Images, Clock3, Settings2, Plus, ArrowUpRight, ArrowRight, RefreshCw, Play, Pause, SkipForward, Expand, Check, Monitor, Smartphone, Tv, Ellipsis, Pencil, Trash2, X, AlertCircle, WifiOff, ImagePlus, type LucideIcon } from 'lucide-react';
 import { useWallta } from './lib/useWallta';
+import { useUpdates } from './lib/useUpdates';
 import { callNative, isNative } from './lib/native';
 import { sourceLabels, type Source, type SourceKind } from './lib/types';
 import { SourceIcon, Toggle, SectionTitle, intervalLabel } from './components/ui';
@@ -17,6 +18,7 @@ const nav: { page: Page; label: string; Icon: LucideIcon }[] = [{ page: 'overvie
 export default function App() {
   const wallta = useWallta();
   const { state, capabilities, media, busy, loaded, notice, save, next, toggle, refresh, perform, notify } = wallta;
+  const updates = useUpdates(loaded);
   const [page, setPage] = useState<Page>('overview');
   const [dialog, setDialog] = useState<{ initial?: Source; kind?: SourceKind } | null>(null);
   const [slideshow, setSlideshow] = useState(false);
@@ -42,11 +44,11 @@ export default function App() {
   return <div className="app-shell">
     <aside className="sidebar">
       <a className="brand" href="#" onClick={event => { event.preventDefault(); setPage('overview'); }} aria-label="Wallta - Tổng quan"><img src="./wallta.svg" alt="" /><span>wallta<span className="brand-dot">.</span></span></a>
-      <nav aria-label="Điều hướng chính">{nav.map(({ page: value, label, Icon }) => <button key={value} className={`nav-item ${page === value ? 'active' : ''}`} onClick={() => setPage(value)} aria-label={label} aria-current={page === value ? 'page' : undefined}><Icon size={19} strokeWidth={1.6} /><span>{label}</span>{value === 'sources' && state.sources.length > 0 && <span className="nav-count">{state.sources.length}</span>}</button>)}</nav>
+      <nav aria-label="Điều hướng chính">{nav.map(({ page: value, label, Icon }) => <button key={value} className={`nav-item ${page === value ? 'active' : ''}`} onClick={() => setPage(value)} aria-label={label} aria-current={page === value ? 'page' : undefined}><Icon size={19} strokeWidth={1.6} /><span>{label}</span>{value === 'settings' && ['available', 'ready', 'permissionRequired'].includes(updates.status.phase) && <i className="update-dot" aria-label="Có bản cập nhật" />}{value === 'sources' && state.sources.length > 0 && <span className="nav-count">{state.sources.length}</span>}</button>)}</nav>
       <div className="sidebar-spacer" />
       <div className="device-status"><span className="device-icon"><PlatformIcon size={18} /></span><div><strong>{platform === 'browser' ? 'Bản xem trước' : platform === 'windows' ? 'Windows' : platform === 'android-tv' ? 'Android TV' : 'Android'}</strong><small>{state.running ? 'Tự đổi: Bật' : 'Tự đổi: Tắt'}</small></div><i className={state.running ? 'live' : ''} /></div>
     </aside>
-    <div className="main-column"><header className="topbar"><div className="breadcrumb">Wallta <span>/</span><strong>{nav.find(item => item.page === page)?.label}</strong></div><div className="topbar-right"><span className="version-pill">BẢN 0.1</span><button className="icon-button" title="Làm mới nguồn ảnh" aria-label="Làm mới nguồn ảnh" disabled={busy} onClick={() => void refresh()}><RefreshCw size={17} className={busy ? 'spin' : ''} /></button><span className="avatar">W</span></div></header>
+    <div className="main-column"><header className="topbar"><div className="breadcrumb">Wallta <span>/</span><strong>{nav.find(item => item.page === page)?.label}</strong></div><div className="topbar-right"><span className="version-pill">{updates.status.currentVersion}</span><button className="icon-button" title="Làm mới nguồn ảnh" aria-label="Làm mới nguồn ảnh" disabled={busy} onClick={() => void refresh()}><RefreshCw size={17} className={busy ? 'spin' : ''} /></button><span className="avatar">W</span></div></header>
       <main className="main-content">
         {platform === 'browser' && <div className="preview-banner"><Monitor size={14} /><span>Bản web: không đổi hình nền hệ thống hoặc chạy nền.</span></div>}
         {!loaded ? <div className="loading-screen"><RefreshCw className="spin" size={30} /><p>Đang tải…</p></div> : <>
@@ -63,7 +65,7 @@ export default function App() {
         </>}
         {page === 'sources' && <><SectionTitle title="Nguồn ảnh"><div className="section-actions"><button className="button secondary" onClick={() => setTransfer(true)}><ArrowUpRight size={16} />Gửi / nhận qua Wi-Fi</button><button className="button primary" onClick={() => add()}><Plus size={18} />Thêm nguồn ảnh</button></div></SectionTitle><div className="source-type-strip">{(['local','drive','manifest','photos'] as SourceKind[]).map(kind => <button key={kind} onClick={() => add(kind)}><SourceIcon kind={kind} size={22} /><div><strong>{sourceLabels[kind]}</strong><small>{kind === 'local' ? 'Máy / USB' : kind === 'drive' ? 'Thư mục Drive' : kind === 'photos' ? 'Nhập ảnh / album TV' : 'JSON, WebDAV & link ảnh'}</small></div><Plus size={16} /></button>)}</div><div className="subsection-heading"><div><h3>Nguồn đã thêm <span className="count-badge">{state.sources.length}</span></h3><p>{enabledSources.length} nguồn đang bật · {media.length} ảnh khả dụng</p></div><button className="button secondary" disabled={busy} onClick={() => void refresh()}><RefreshCw size={15} />Làm mới</button></div>{state.sources.length ? <div className="source-grid full">{sourceCards()}<button className="add-source-card" onClick={() => add()}><span><Plus size={21} /></span><strong>Thêm nguồn ảnh</strong></button></div> : <div className="panel empty-library"><span className="empty-icon"><ImagePlus size={34} strokeWidth={1.2} /></span><h3>Chưa có nguồn ảnh</h3><p>Chọn thư mục hoặc thêm nguồn online.</p><button className="button primary" onClick={() => add()}><Plus size={17} />Thêm nguồn ảnh</button></div>}{state.error && <div className="source-error"><AlertCircle size={18} /><p>{state.error}</p></div>}{media.length > 0 && <><div className="subsection-heading"><div><h3>Ảnh</h3><p>{media.length} ảnh từ các nguồn đang bật</p></div><button className="text-button" onClick={() => setSlideshow(true)}>Trình chiếu <ArrowUpRight size={15} /></button></div><div className="media-grid">{media.slice(0, 24).map(item => <div className="media-tile" key={item.id}><MediaImage item={item} loading="lazy" alt={item.name} /><span>{item.name}</span></div>)}</div></>}</>}
         {page === 'schedule' && <Schedule settings={state.settings} capabilities={capabilities} busy={busy} onSave={settings => save({ ...state, settings })} />}
-        {page === 'settings' && <SettingsPage state={state} capabilities={capabilities} busy={busy} onSave={save} perform={perform} notify={notify} />}
+        {page === 'settings' && <SettingsPage state={state} capabilities={capabilities} busy={busy} onSave={save} perform={perform} notify={notify} updates={updates} />}
         </>}
       </main>
     </div>

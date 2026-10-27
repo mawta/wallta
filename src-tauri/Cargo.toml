@@ -1,10 +1,10 @@
 [package]
 name = "wallta"
-version = "0.1.1"
+version = "0.1.2"
 description = "Wallta wallpaper rotation"
 authors = ["Wallta"]
 edition = "2021"
-rust-version = "1.80"
+rust-version = "1.90"
 
 [lib]
 name = "wallta_lib"
@@ -29,6 +29,8 @@ rfd = "0.15"
 open = "5"
 
 [target.'cfg(windows)'.dependencies]
+tauri-plugin-updater = "=2.14.0"
+tokio = { version = "1", features = ["sync", "time", "macros"] }
 winreg = "0.55"
 keyring = { version = "3", features = ["windows-native"] }
 
