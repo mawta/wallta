@@ -305,28 +305,26 @@ fn drive_folder(location: &str) -> Result<String, String> {
     Ok(id)
 }
 fn list_drive(client: &Client, source: &Source) -> Result<Vec<MediaItem>, String> {
-    let deadline = std::time::Instant::now() + Duration::from_secs(60);
     if source.api_key.is_none() && source.access_token.is_none() {
         return Err("Google Drive needs an API key for a public folder, or an OAuth access token for private files. Configure credentials first.".into());
     }
     let id = drive_folder(&source.location)?;
-    let query = format!("'{id}' in parents and trashed = false and mimeType contains 'image/'");
-    let mut result = vec![];
-    let mut token = String::new();
-    let mut seen = HashSet::new();
-    loop {
-        if std::time::Instant::now() > deadline || seen.len() >= 100 {
-            return Err(
-                "Drive listing exceeded its time or pagination limit. Use a smaller folder.".into(),
-            );
-        }
+    walk_drive(source, &id, |folder, page| {
+        let filter = if source.recursive {
+            "(mimeType contains 'image/' or mimeType = 'application/vnd.google-apps.folder')"
+        } else {
+            "mimeType contains 'image/'"
+        };
+        let query = format!("'{folder}' in parents and trashed = false and {filter}");
         let mut request = client
             .get("https://www.googleapis.com/drive/v3/files")
             .query(&[
                 ("q", query.as_str()),
                 ("pageSize", "1000"),
                 ("fields", "nextPageToken,files(id,name,mimeType)"),
-                ("pageToken", token.as_str()),
+                ("pageToken", page),
+                ("supportsAllDrives", "true"),
+                ("includeItemsFromAllDrives", "true"),
             ]);
         if let Some(key) = &source.api_key {
             request = request.query(&[("key", key)]);
@@ -334,44 +332,86 @@ fn list_drive(client: &Client, source: &Source) -> Result<Vec<MediaItem>, String
         if let Some(token) = &source.access_token {
             request = request.bearer_auth(token);
         }
-        let page = json_response(request)?;
-        let files = page
-            .get("files")
-            .and_then(Value::as_array)
-            .ok_or("Drive did not return a files list.")?;
-        for file in files {
-            if let (Some(id), Some(name)) = (
-                file.get("id").and_then(Value::as_str),
-                file.get("name").and_then(Value::as_str),
-            ) {
-                if !id
-                    .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        json_response(request)
+    })
+}
+
+pub fn walk_drive(
+    source: &Source,
+    root: &str,
+    mut fetch: impl FnMut(&str, &str) -> Result<Value, String>,
+) -> Result<Vec<MediaItem>, String> {
+    use std::collections::VecDeque;
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
+    let mut folders = VecDeque::from([(root.to_string(), 0usize)]);
+    let mut visited = HashSet::from([root.to_string()]);
+    let mut file_ids = HashSet::new();
+    let mut result = Vec::new();
+    let mut pages = 0;
+    while let Some((folder, depth)) = folders.pop_front() {
+        let mut token = String::new();
+        let mut seen = HashSet::new();
+        loop {
+            if std::time::Instant::now() > deadline || pages >= 100 {
+                return Err(
+                    "Drive listing exceeded its 60 second / 100 page limit. Use a smaller folder."
+                        .into(),
+                );
+            }
+            pages += 1;
+            let page = fetch(&folder, &token)?;
+            let files = page
+                .get("files")
+                .and_then(Value::as_array)
+                .ok_or("Drive did not return a files list.")?;
+            for file in files {
+                let (Some(id), Some(name), Some(mime)) = (
+                    file.get("id").and_then(Value::as_str),
+                    file.get("name").and_then(Value::as_str),
+                    file.get("mimeType").and_then(Value::as_str),
+                ) else {
+                    continue;
+                };
+                if id.is_empty()
+                    || id.len() > 256
+                    || !id
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
                 {
                     continue;
                 }
-                result.push(item(
-                    format!("https://www.googleapis.com/drive/v3/files/{id}?alt=media"),
-                    Some(name.into()),
-                    &source.id,
-                ));
+                if mime == "application/vnd.google-apps.folder"
+                    && source.recursive
+                    && !visited.contains(id)
+                {
+                    if depth >= 16 || visited.len() >= 1000 {
+                        return Err("Drive recursion is limited to 16 levels and 1000 folders. Choose a smaller folder.".into());
+                    }
+                    visited.insert(id.to_string());
+                    folders.push_back((id.to_string(), depth + 1));
+                } else if mime.starts_with("image/") && file_ids.insert(id.to_string()) {
+                    result.push(item(
+                        format!("https://www.googleapis.com/drive/v3/files/{id}?alt=media"),
+                        Some(name.into()),
+                        &source.id,
+                    ));
+                    if result.len() >= MAX_ITEMS {
+                        return Ok(result);
+                    }
+                }
             }
+            let Some(next) = page
+                .get("nextPageToken")
+                .and_then(Value::as_str)
+                .filter(|t| !t.is_empty())
+            else {
+                break;
+            };
+            if !seen.insert(next.to_owned()) {
+                return Err("Drive returned a repeated page token.".into());
+            }
+            token = next.into();
         }
-        if result.len() >= MAX_ITEMS {
-            result.truncate(MAX_ITEMS);
-            break;
-        }
-        let Some(next) = page
-            .get("nextPageToken")
-            .and_then(Value::as_str)
-            .filter(|t| !t.is_empty())
-        else {
-            break;
-        };
-        if !seen.insert(next.to_owned()) {
-            return Err("Drive returned a repeated page token.".into());
-        }
-        token = next.into();
     }
     Ok(result)
 }

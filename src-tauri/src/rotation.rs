@@ -1,5 +1,41 @@
 use crate::models::Settings;
+use rand::seq::SliceRandom;
 use rand::Rng;
+use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ShuffleBag {
+    pub known: Vec<String>,
+    pub remaining: Vec<String>,
+}
+impl ShuffleBag {
+    pub fn next(&mut self, ids: &[String], previous: Option<&str>) -> Option<String> {
+        let available: HashSet<_> = ids.iter().cloned().collect();
+        self.remaining.retain(|id| available.contains(id));
+        let mut changed = false;
+        for id in ids {
+            if !self.known.contains(id) && !self.remaining.contains(id) {
+                self.remaining.push(id.clone());
+                changed = true;
+            }
+        }
+        self.known = ids.to_vec();
+        if self.remaining.is_empty() {
+            self.remaining = ids.to_vec();
+            changed = true;
+        }
+        if changed {
+            self.remaining.shuffle(&mut rand::thread_rng());
+        }
+        if self.remaining.len() > 1 && self.remaining.last().map(String::as_str) == previous {
+            let last = self.remaining.len() - 1;
+            self.remaining.swap(0, last);
+        }
+        self.remaining.pop()
+    }
+}
 
 pub fn schedule_allows(settings: &Settings, day: u32, minute: u32) -> bool {
     if !settings.schedule_enabled {

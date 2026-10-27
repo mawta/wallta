@@ -1,4 +1,10 @@
-use crate::models::{AppState, Source};
+use crate::{
+    models::{AppState, MediaItem, Source},
+    rotation::ShuffleBag,
+};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -18,6 +24,66 @@ pub fn public_state(state: &mut AppState) -> AppState {
 pub struct Store {
     pub root: PathBuf,
     pub cache: PathBuf,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Catalog {
+    pub fingerprint: String,
+    pub items: Vec<MediaItem>,
+}
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct RuntimeState {
+    pub shuffle: ShuffleBag,
+    pub catalogs: HashMap<String, Catalog>,
+}
+
+pub fn source_fingerprint(source: &Source) -> String {
+    // Only the hash is persisted. Credential values remain in Credential Manager.
+    let identity = serde_json::json!([
+        source.id,
+        source.kind,
+        source.location,
+        source.recursive,
+        source.enabled,
+        source.username,
+        source.password,
+        source.api_key,
+        source.access_token
+    ]);
+    format!("{:x}", Sha256::digest(identity.to_string().as_bytes()))
+}
+pub fn offline_items(source: &Source, catalog: Option<&Catalog>, cache: &Path) -> Vec<MediaItem> {
+    if !source.enabled || source.kind == "photos" || source.kind == "local" {
+        return vec![];
+    }
+    catalog
+        .filter(|c| c.fingerprint == source_fingerprint(source))
+        .map(|c| {
+            c.items
+                .iter()
+                .filter(|m| cache.join(format!("{}.img", m.id)).is_file())
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default()
+}
+pub fn reconcile_catalogs(runtime: &mut RuntimeState, sources: &[Source], cache: &Path) {
+    runtime.catalogs.retain(|id, catalog| {
+        let retain = sources.iter().any(|s| {
+            s.id == *id
+                && s.enabled
+                && s.kind != "photos"
+                && catalog.fingerprint == source_fingerprint(s)
+        });
+        if !retain {
+            for media in &catalog.items {
+                let _ = fs::remove_file(cache.join(format!("{}.img", media.id)));
+                let _ = fs::remove_file(cache.join(format!("{}-preview.png", media.id)));
+            }
+        }
+        retain
+    });
 }
 impl Store {
     pub fn new(root: PathBuf, cache: PathBuf) -> Result<Self, String> {
@@ -55,6 +121,24 @@ impl Store {
             put_secret(&source.id, field, None)?;
         }
         Ok(())
+    }
+    pub fn load_runtime(&self) -> Result<RuntimeState, String> {
+        let path = self.root.join("runtime.json");
+        if !path.exists() {
+            return Ok(RuntimeState::default());
+        }
+        let bytes = fs::read(path).map_err(|e| e.to_string())?;
+        if bytes.len() > 32 * 1024 * 1024 {
+            return Err("Saved catalog exceeds 32 MB.".into());
+        }
+        serde_json::from_slice(&bytes).map_err(|_| "Saved catalog is invalid.".into())
+    }
+    pub fn save_runtime(&self, runtime: &RuntimeState) -> Result<(), String> {
+        let bytes = serde_json::to_vec(runtime).map_err(|e| e.to_string())?;
+        if bytes.len() > 32 * 1024 * 1024 {
+            return Err("Catalog exceeds 32 MB. Use fewer sources or smaller libraries.".into());
+        }
+        atomic_write(&self.root.join("runtime.json"), &bytes)
     }
 }
 

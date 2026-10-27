@@ -31,11 +31,6 @@ pub fn run() {
             )
             .map_err(std::io::Error::other)?;
             let engine = Arc::new(commands::Engine::new(store).map_err(std::io::Error::other)?);
-            commands::allow_local_assets(
-                app.handle(),
-                &engine.snapshot().map_err(std::io::Error::other)?,
-            )
-            .map_err(std::io::Error::other)?;
             app.manage(engine.clone());
             let show = MenuItem::with_id(app, "show", "Show Wallta", true, None::<&str>)?;
             let next = MenuItem::with_id(app, "next", "Next wallpaper", true, None::<&str>)?;

@@ -1,7 +1,7 @@
 use crate::{
     models::*,
     providers, rotation,
-    storage::{self, Store},
+    storage::{self, Catalog, RuntimeState, Store},
     wallpaper,
 };
 use chrono::{Datelike, Timelike};
@@ -16,7 +16,7 @@ use std::{
     },
     time::{Duration, Instant},
 };
-use tauri::{Emitter, Manager};
+use tauri::Emitter;
 
 pub struct Engine {
     pub inner: Mutex<Runtime>,
@@ -29,22 +29,41 @@ pub struct Runtime {
     pub next_due: Instant,
     pub wallpaper_path: Option<PathBuf>,
     pub media: Vec<MediaItem>,
+    pub persistent: RuntimeState,
 }
 impl Engine {
     pub fn new(store: Store) -> Result<Self, String> {
-        let state = match store.load() {
+        let mut state = match store.load() {
             Ok(s) => s,
             Err(e) => AppState {
                 error: Some(e),
                 ..Default::default()
             },
         };
+        let mut persistent = match store.load_runtime() {
+            Ok(r) => r,
+            Err(e) => {
+                state.error = Some(e);
+                RuntimeState::default()
+            }
+        };
+        storage::reconcile_catalogs(&mut persistent, &state.sources, &store.cache);
+        let wallpaper_path = fs::read_dir(store.root.join("wallpaper"))
+            .ok()
+            .and_then(|entries| {
+                entries
+                    .filter_map(Result::ok)
+                    .filter(|e| e.path().extension().is_some_and(|x| x == "bmp"))
+                    .max_by_key(|e| e.metadata().and_then(|m| m.modified()).ok())
+                    .map(|e| e.path())
+            });
         Ok(Self {
             inner: Mutex::new(Runtime {
                 state,
                 next_due: Instant::now(),
-                wallpaper_path: None,
+                wallpaper_path,
                 media: Vec::new(),
+                persistent,
             }),
             store,
             client: providers::client()?,
@@ -58,22 +77,50 @@ impl Engine {
             .map_err(|_| "Wallpaper service lock failed.".to_string())?;
         Ok(storage::public_state(&mut runtime.state))
     }
-    fn list(&self, state: &AppState) -> (Vec<MediaItem>, Vec<String>) {
+    fn list(
+        &self,
+        state: &AppState,
+        persistent: &mut RuntimeState,
+    ) -> (Vec<MediaItem>, Vec<String>) {
         let revision = self.revision.load(Ordering::SeqCst);
         let mut images = vec![];
         let mut errors = vec![];
         let wifi = !state.settings.wifi_only || wallpaper::wifi_connected();
+        storage::reconcile_catalogs(persistent, &state.sources, &self.store.cache);
         for source in state.sources.iter().filter(|s| s.enabled) {
             if self.revision.load(Ordering::SeqCst) != revision {
                 break;
             }
             if source.kind != "local" && !wifi {
                 errors.push(format!("{}: Waiting for Wi-Fi.", source.name));
+                images.extend(storage::offline_items(
+                    source,
+                    persistent.catalogs.get(&source.id),
+                    &self.store.cache,
+                ));
                 continue;
             }
             match providers::list_source(&self.client, source) {
-                Ok(mut items) => images.append(&mut items),
-                Err(e) => errors.push(format!("{}: {e}", source.name)),
+                Ok(mut items) => {
+                    if source.kind != "photos" {
+                        persistent.catalogs.insert(
+                            source.id.clone(),
+                            Catalog {
+                                fingerprint: storage::source_fingerprint(source),
+                                items: items.clone(),
+                            },
+                        );
+                    }
+                    images.append(&mut items)
+                }
+                Err(e) => {
+                    errors.push(format!("{}: {e}", source.name));
+                    images.extend(storage::offline_items(
+                        source,
+                        persistent.catalogs.get(&source.id),
+                        &self.store.cache,
+                    ));
+                }
             }
         }
         let mut ids = HashSet::new();
@@ -82,9 +129,11 @@ impl Engine {
     }
     pub fn list_media(&self) -> Result<Vec<MediaItem>, String> {
         let mut runtime = self.inner.lock().map_err(|e| e.to_string())?;
-        let (images, errors) = self.list(&runtime.state);
+        let state = runtime.state.clone();
+        let (images, errors) = self.list(&state, &mut runtime.persistent);
         runtime.state.error = (!errors.is_empty()).then(|| errors.join("\n"));
         runtime.media = images.clone();
+        self.store.save_runtime(&runtime.persistent)?;
         Ok(images)
     }
     pub fn rotate(&self, automatic: bool) -> Result<AppState, String> {
@@ -103,7 +152,8 @@ impl Engine {
                 return Ok(storage::public_state(&mut runtime.state));
             }
         }
-        let (mut items, mut errors) = self.list(&runtime.state);
+        let state = runtime.state.clone();
+        let (mut items, mut errors) = self.list(&state, &mut runtime.persistent);
         if self.revision.load(Ordering::SeqCst) != revision {
             return Ok(storage::public_state(&mut runtime.state));
         }
@@ -113,17 +163,28 @@ impl Engine {
             .current
             .as_ref()
             .and_then(|c| items.iter().position(|i| i.id == c.id));
-        let index = rotation::choose_index(
-            items.len(),
-            previous,
-            runtime.state.settings.order == "shuffle",
-        );
-        if let Some(index) = index {
-            items.rotate_left(index);
+        let shuffle = runtime.state.settings.order == "shuffle";
+        let ids: Vec<String> = items.iter().map(|m| m.id.clone()).collect();
+        if !shuffle {
+            if let Some(index) = rotation::choose_index(items.len(), previous, false) {
+                items.rotate_left(index);
+            }
         }
         // Try another image if the first item is corrupt. Never replace current on failure.
         let mut applied = false;
-        for media in items.iter().take(20) {
+        for attempt in 0..items.len().min(20) {
+            let media = if shuffle {
+                let previous = runtime.state.current.as_ref().map(|m| m.id.clone());
+                let Some(id) = runtime.persistent.shuffle.next(&ids, previous.as_deref()) else {
+                    break;
+                };
+                let Some(media) = items.iter().find(|m| m.id == id) else {
+                    continue;
+                };
+                media
+            } else {
+                &items[attempt]
+            };
             if self.revision.load(Ordering::SeqCst) != revision {
                 return Ok(storage::public_state(&mut runtime.state));
             }
@@ -148,7 +209,11 @@ impl Engine {
                     if self.revision.load(Ordering::SeqCst) != revision {
                         return Err("Wallpaper change cancelled because settings changed.".into());
                     }
-                    wallpaper::apply(&bytes, &runtime.state.settings, &self.store.cache)
+                    wallpaper::apply(
+                        &bytes,
+                        &runtime.state.settings,
+                        &self.store.root.join("wallpaper"),
+                    )
                 }) {
                 Ok(path) => {
                     runtime.wallpaper_path = Some(path);
@@ -175,6 +240,7 @@ impl Engine {
             runtime.wallpaper_path.as_deref(),
         )?;
         self.store.save(&runtime.state)?;
+        self.store.save_runtime(&runtime.persistent)?;
         Ok(storage::public_state(&mut runtime.state))
     }
     fn prepare(
@@ -203,6 +269,7 @@ impl Engine {
         // Decode before caching: HTML/error pages and broken images never become usable cache entries.
         wallpaper::render(&bytes, settings, (1, 1))?;
         storage::atomic_write(&path, &bytes)?;
+        self.trim_cache(settings.cache_limit_mb, None)?;
         Ok(bytes)
     }
     fn trim_cache(&self, limit_mb: u64, keep: Option<&std::path::Path>) -> Result<(), String> {
@@ -259,12 +326,13 @@ impl Engine {
             .iter()
             .find(|s| s.id == media.source_id && s.enabled)
             .ok_or("The image source has been removed or disabled.")?;
-        if source.kind == "local" {
-            return Ok(media.url.clone());
-        }
         let path = self.store.cache.join(format!("{}-preview.png", media.id));
         if !path.exists() {
-            if runtime.state.settings.wifi_only && !wallpaper::wifi_connected() {
+            if source.kind != "local"
+                && runtime.state.settings.wifi_only
+                && !wallpaper::wifi_connected()
+                && !self.store.cache.join(format!("{}.img", media.id)).is_file()
+            {
                 return Err("Waiting for Wi-Fi before downloading preview.".into());
             }
             let bytes = self.prepare(media, source, &runtime.state.settings)?;
@@ -282,20 +350,6 @@ impl Engine {
     }
 }
 
-pub fn allow_local_assets(app: &tauri::AppHandle, state: &AppState) -> Result<(), String> {
-    for source in state
-        .sources
-        .iter()
-        .filter(|s| s.kind == "local" && s.enabled)
-    {
-        if let Ok(path) = fs::canonicalize(&source.location) {
-            app.asset_protocol_scope()
-                .allow_directory(path, source.recursive)
-                .map_err(|e| e.to_string())?;
-        }
-    }
-    Ok(())
-}
 pub fn start_worker(app: tauri::AppHandle, engine: Arc<Engine>) {
     std::thread::spawn(move || loop {
         std::thread::sleep(Duration::from_secs(1));
@@ -367,7 +421,6 @@ pub async fn pick_folder() -> Result<Option<String>, String> {
 #[tauri::command]
 pub async fn save_state(
     mut state: AppState,
-    app: tauri::AppHandle,
     engine: tauri::State<'_, Arc<Engine>>,
 ) -> Result<AppState, String> {
     let engine = engine.inner().clone();
@@ -385,11 +438,17 @@ pub async fn save_state(
             storage::merge_credentials(source, runtime.state.sources.iter().find(|s| s.id == source.id));
         }
         // Native runtime owns wallpaper status. A stale UI cannot overwrite a successful background change.
-        state.current = runtime.state.current.clone(); state.last_changed = runtime.state.last_changed.clone(); state.error = None;
+        state.current = runtime.state.current.clone().filter(|media| {
+            let old = runtime.state.sources.iter().find(|s| s.id == media.source_id);
+            let new = state.sources.iter().find(|s| s.id == media.source_id && s.enabled);
+            matches!((old, new), (Some(old), Some(new)) if storage::source_fingerprint(old) == storage::source_fingerprint(new))
+        }); state.last_changed = runtime.state.last_changed.clone(); state.error = None;
         if state.settings.autostart != runtime.state.settings.autostart { wallpaper::set_autostart(state.settings.autostart)?; }
-        allow_local_assets(&app, &state)?;
         engine.store.save(&state)?;
         for old in &runtime.state.sources { if !state.sources.iter().any(|s| s.id == old.id) { engine.store.forget(old)?; } }
+        storage::reconcile_catalogs(&mut runtime.persistent, &state.sources, &engine.store.cache);
+        runtime.media.clear();
+        engine.store.save_runtime(&runtime.persistent)?;
         runtime.state = state; runtime.next_due = Instant::now();
         engine.trim_cache(runtime.state.settings.cache_limit_mb, runtime.wallpaper_path.as_deref())?;
         Ok(storage::public_state(&mut runtime.state))

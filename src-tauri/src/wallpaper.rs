@@ -82,9 +82,7 @@ pub fn apply(bytes: &[u8], settings: &Settings, cache: &Path) -> Result<PathBuf,
         }
         let (width, height) = unsafe { (GetSystemMetrics(0), GetSystemMetrics(1)) };
         let bitmap = render(bytes, settings, (width.max(1) as u32, height.max(1) as u32))?;
-        if bitmap.len() as u64 > settings.cache_limit_mb * 1024 * 1024 {
-            return Err("The display bitmap exceeds the configured cache budget. Increase the cache limit for this screen resolution.".into());
-        }
+        std::fs::create_dir_all(cache).map_err(|e| e.to_string())?;
         // Alternate files ensure a failed decode/write never damages the wallpaper currently on screen.
         let path = cache.join(format!(
             "wallpaper-{}.bmp",
@@ -107,6 +105,15 @@ pub fn apply(bytes: &[u8], settings: &Settings, cache: &Path) -> Result<PathBuf,
                 "Windows could not apply the wallpaper: {}",
                 std::io::Error::last_os_error()
             ));
+        }
+        // The active OS wallpaper is outside the bounded download/preview cache.
+        // Keep the previous file until Windows accepts its replacement.
+        if let Ok(entries) = std::fs::read_dir(cache) {
+            for entry in entries.flatten() {
+                if entry.path() != path && entry.path().extension().is_some_and(|e| e == "bmp") {
+                    let _ = std::fs::remove_file(entry.path());
+                }
+            }
         }
         Ok(path)
     }
