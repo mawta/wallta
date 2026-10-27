@@ -29,7 +29,7 @@ Windows 10/11 x64: cài Rust stable, Visual Studio C++ Build Tools và WebView2,
 
 Android 8+ (API 26): dùng JDK 17, Gradle 8.14 và SDK 35. Xem [hướng dẫn Android/TV](android/README.md). CI tạo APK debug để sideload; bản cài Windows hiện chưa ký chứng thư phát hành.
 
-Ba workflow GitHub Actions kiểm tra Windows, Android và relay. Bản cài được lưu trong Actions artifacts của repo private; phải đăng nhập tài khoản được cấp quyền để tải.
+Ba workflow GitHub Actions kiểm tra Windows, Android và relay. Repo đã công khai; tải bộ cài tại GitHub Releases không cần đăng nhập. Actions artifacts lưu kết quả build phục vụ kiểm tra.
 
 ## Nguồn online
 
