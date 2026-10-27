@@ -178,3 +178,37 @@ fn persisted_state_never_contains_credentials() {
     assert!(!json.contains("token"));
     assert!(!json.contains("\"key\""));
 }
+
+#[test]
+fn disconnected_photos_cache_is_erased_without_a_persisted_catalog() {
+    use wallta_lib::storage::{reconcile_catalogs, RuntimeState};
+    let cache = tempfile::tempdir().unwrap();
+    let id = "a".repeat(64);
+    for suffix in [".img", "-preview.png"] {
+        std::fs::write(cache.path().join(format!("{id}{suffix}")), b"cached").unwrap();
+    }
+    let mut runtime: RuntimeState = serde_json::from_value(serde_json::json!({
+        "cacheOwners": {id.clone(): {"sourceId":"photos", "fingerprint":"old"}}
+    }))
+    .unwrap();
+    reconcile_catalogs(&mut runtime, &[], cache.path());
+    assert_eq!(std::fs::read_dir(cache.path()).unwrap().count(), 0);
+}
+
+#[test]
+fn disconnected_source_erases_downloads_absent_from_latest_listing() {
+    use wallta_lib::storage::{reconcile_catalogs, source_fingerprint, RuntimeState};
+    let source: wallta_lib::models::Source = serde_json::from_str(r#"{"id":"a","name":"Album","kind":"manifest","location":"https://example.com/list","enabled":true}"#).unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    let id = "b".repeat(64);
+    std::fs::write(cache.path().join(format!("{id}.img")), b"cached").unwrap();
+    let mut runtime: RuntimeState = serde_json::from_value(serde_json::json!({
+        "catalogs": {"a": {"fingerprint":source_fingerprint(&source),"items":[]}},
+        "cacheOwners": {id.clone(): {"sourceId":"a", "fingerprint":source_fingerprint(&source)}}
+    }))
+    .unwrap();
+    reconcile_catalogs(&mut runtime, &[source.clone()], cache.path());
+    assert!(cache.path().join(format!("{id}.img")).exists());
+    reconcile_catalogs(&mut runtime, &[], cache.path());
+    assert!(!cache.path().join(format!("{id}.img")).exists());
+}

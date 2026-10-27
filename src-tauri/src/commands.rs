@@ -483,3 +483,117 @@ pub async fn open_external(url: String) -> Result<(), String> {
     }
     blocking(move || open::that(parsed.as_str()).map_err(|e| e.to_string())).await
 }
+
+#[cfg(test)]
+mod concurrency_tests {
+    use super::*;
+    use std::{
+        io::{Read, Write},
+        net::TcpListener,
+        sync::mpsc,
+        thread,
+    };
+
+    // The server signals only after the request reaches the network, then waits
+    // for the test to finish checking control responsiveness before replying.
+    fn delayed_server(
+        body: Vec<u8>,
+    ) -> (
+        String,
+        mpsc::Receiver<()>,
+        mpsc::Sender<()>,
+        thread::JoinHandle<()>,
+    ) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/image.png", listener.local_addr().unwrap());
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let server = thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            socket
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut request = [0; 4096];
+            let _ = socket.read(&mut request).unwrap();
+            started_tx.send(()).unwrap();
+            release_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            write!(
+                socket,
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            )
+            .unwrap();
+            socket.write_all(&body).unwrap();
+        });
+        (url, started_rx, release_tx, server)
+    }
+
+    fn engine_for(url: String, kind: &str) -> (tempfile::TempDir, Arc<Engine>) {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = Arc::new(
+            Engine::new(Store::new(dir.path().join("state"), dir.path().join("cache")).unwrap())
+                .unwrap(),
+        );
+        let source: Source = serde_json::from_value(serde_json::json!({"id":"remote", "name":"Remote", "kind":kind, "location":url, "enabled":true})).unwrap();
+        engine.inner.lock().unwrap().state.sources = vec![source];
+        (dir, engine)
+    }
+
+    #[test]
+    fn state_controls_remain_responsive_during_remote_listing() {
+        let (url, started, release, server) = delayed_server(b"[]".to_vec());
+        let (_dir, engine) = engine_for(url, "manifest");
+        let worker_engine = engine.clone();
+        let listing = thread::spawn(move || worker_engine.list_media());
+        started.recv_timeout(Duration::from_secs(5)).unwrap();
+        let controls = engine.clone();
+        let (tx, rx) = mpsc::channel();
+        let control = thread::spawn(move || {
+            tx.send(
+                controls
+                    .snapshot()
+                    .and_then(|_| controls.set_running(false)),
+            )
+            .unwrap();
+        });
+        let result = rx.recv_timeout(Duration::from_millis(500));
+        release.send(()).unwrap();
+        server.join().unwrap();
+        listing.join().unwrap().unwrap();
+        control.join().unwrap();
+        assert!(result.is_ok(), "State/pause was blocked by network I/O");
+    }
+
+    #[test]
+    fn cancelled_preview_never_publishes_downloads_after_pause() {
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::RgbImage::new(2, 2)
+            .write_to(&mut png, image::ImageFormat::Png)
+            .unwrap();
+        let (url, started, release, server) = delayed_server(png.into_inner());
+        let (_dir, engine) = engine_for(url, "url");
+        let media = {
+            let mut runtime = engine.inner.lock().unwrap();
+            let source = &runtime.state.sources[0];
+            let media = providers::item(source.location.clone(), None, &source.id);
+            runtime.media = vec![media.clone()];
+            media
+        };
+        let worker_engine = engine.clone();
+        let preview = thread::spawn(move || worker_engine.preview(&media.id));
+        started.recv_timeout(Duration::from_secs(5)).unwrap();
+        let controls = engine.clone();
+        let (tx, rx) = mpsc::channel();
+        let control = thread::spawn(move || {
+            tx.send(controls.set_running(false)).unwrap();
+        });
+        let result = rx.recv_timeout(Duration::from_millis(500));
+        release.send(()).unwrap();
+        server.join().unwrap();
+        let outcome = preview.join().unwrap();
+        control.join().unwrap();
+        assert!(result.is_ok(), "Pause was blocked by image download");
+        assert!(outcome.is_err(), "Cancelled download published a preview");
+        assert_eq!(fs::read_dir(&engine.store.cache).unwrap().count(), 0);
+    }
+}
