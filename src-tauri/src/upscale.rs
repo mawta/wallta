@@ -657,6 +657,64 @@ mod tests {
     }
 
     #[test]
+    fn later_image_failure_keeps_completed_full_resolution_results_saveable() {
+        let temp = tempfile::tempdir().unwrap();
+        let engine = Arc::new(
+            Engine::new(
+                crate::storage::Store::new(temp.path().join("data"), temp.path().join("cache"))
+                    .unwrap(),
+            )
+            .unwrap(),
+        );
+        let original = temp.path().join("original.png");
+        let bytes = png_test_image();
+        fs::write(&original, &bytes).unwrap();
+        let source: Source = serde_json::from_value(serde_json::json!({
+            "id":"original", "name":"Original", "kind":"local", "location":temp.path()
+        }))
+        .unwrap();
+        let media = crate::providers::item(original.to_string_lossy().into(), None, &source.id);
+        {
+            let mut state = engine.inner.lock().unwrap();
+            state.state.sources.push(source);
+            state.media.push(media.clone());
+        }
+        let manager = Arc::new(UpscaleManager::new(engine.clone()));
+        let started = manager
+            .start(vec![media.id, "missing-image".into()], UpscaleMode::Fast)
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(20);
+        let status = loop {
+            let status = manager.status().unwrap();
+            if status.phase == Phase::Error {
+                break status;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "Worker did not finish: {:?}",
+                status
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        assert_eq!(status.completed, 1);
+        assert_eq!(status.total, 2);
+        assert_eq!(
+            status.results.len(),
+            1,
+            "A later failure discarded a completed image"
+        );
+        assert!(Path::new(&status.results[0].result_preview).is_file());
+        let saved = manager.save(started.job_id.as_deref().unwrap()).unwrap();
+        let saved_bytes = fs::read(Path::new(&saved.location).join("001.jpg")).unwrap();
+        assert_eq!(decode(&saved_bytes).unwrap().dimensions(), (38, 3840));
+        assert_eq!(fs::read(original).unwrap(), bytes);
+        assert_eq!(
+            manager.save(started.job_id.as_deref().unwrap()).unwrap().id,
+            saved.id
+        );
+    }
+
+    #[test]
     fn stale_results_and_cancelled_results_cannot_be_saved() {
         let temp = tempfile::tempdir().unwrap();
         let engine = Arc::new(
