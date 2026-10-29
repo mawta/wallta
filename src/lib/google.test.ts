@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { googlePollDelay, googleVerificationUrl } from './google';
+import { googleConnectionChanges, googlePollDelay, googleVerificationUrl } from './google';
 
 it('respects server polling intervals with bounded fallback', () => {
   expect(googlePollDelay(12)).toBe(12000);
@@ -16,4 +16,11 @@ it('allows only the configured HTTPS relay origin for TV pairing', () => {
   expect(googleVerificationUrl('https://relay.example/connect/abc', 'https://relay.example/')).toBe('https://relay.example/connect/abc');
   expect(googleVerificationUrl('https://other.example/connect/abc', 'https://relay.example')).toBeNull();
   expect(googleVerificationUrl('http://relay.example/connect/abc', 'http://relay.example')).toBeNull();
+});
+it('clears the previous folder and identity when a new Drive grant needs a fresh selection', () => {
+  const changed = googleConnectionChanges({ id: 'source', kind: 'drive', name: 'Drive', location: 'old-folder', enabled: true, recursive: true, google: { provider: 'drive', account: 'old@example.com', selectionName: 'Old', connected: true, connectionId: 'old' } }, { phase: 'ready' });
+  expect(changed.location).toBe('');
+  expect(changed.google?.account).toBeUndefined();
+  expect(changed.google?.selectionName).toBeUndefined();
+  expect(changed.google?.connectionId).not.toBe('old');
 });

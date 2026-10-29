@@ -10,6 +10,7 @@ export interface Source {
   password?: string;
   apiKey?: string;
   accessToken?: string;
+  google?: { provider: 'drive' | 'photos'; account?: string; selectionName?: string; connected: boolean; connectionId?: string };
 }
 export interface MediaItem { id: string; name: string; url: string; sourceId: string }
 export interface Settings {

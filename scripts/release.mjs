@@ -6,7 +6,7 @@ import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 
 export const repository = 'mawta/wallta';
-export const releaseNotes = 'Wallta now checks for stable updates in Settings → Updates. Download and install updates when you choose, without a GitHub login.';
+export const releaseNotes = 'Lưu tài khoản Drive rồi chọn hoặc đổi thư mục ngay trên nguồn đã lưu. Ghi nhớ tài khoản và bộ ảnh Google Photos, hiển thị rõ nguồn đang dùng. Có thể lưu và áp dụng ngay, bật khởi động cùng Windows. Sửa lỗi theo dõi đăng nhập Google và cache khi đổi tài khoản.';
 const readJson = async path => JSON.parse(await readFile(path,'utf8'));
 const sha256 = data => createHash('sha256').update(data).digest('hex');
 const requireValue = (value,message) => { if (!value) throw new Error(message); return value; };

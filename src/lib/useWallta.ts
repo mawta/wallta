@@ -3,6 +3,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { callNative, errorMessage, isNative } from './native';
 import { isWithinSchedule } from './rules';
 import { emptyState, defaultSettings, type AppState, type Capabilities, type MediaItem } from './types';
+import type { Source } from './types';
+import { saveSourceSelection, type SaveSourceOptions } from './saveSource';
 
 const normalize = (state: AppState): AppState => ({ ...emptyState, ...state, settings: { ...defaultSettings, ...state.settings } });
 export function useWallta() {
@@ -46,6 +48,15 @@ export function useWallta() {
     setState(normalize(await callNative<AppState>('save_state', { state: next })));
     await refresh(); notify(message);
   });
+  const saveSource = async (source: Source, options: SaveSourceOptions) => {
+    let persisted = false;
+    await perform(async () => {
+      const result = await saveSourceSelection(state, source, options, callNative, saved => { persisted = true; setState(normalize(saved)); }, setMedia);
+      setState(normalize(result.state)); setMedia(result.media);
+      notify(options.apply ? 'Đã áp dụng nguồn ảnh · Tự đổi: Bật.' : source.location ? 'Đã lưu nguồn ảnh.' : 'Đã lưu tài khoản. Chọn thư mục để sử dụng.');
+    });
+    return persisted;
+  };
   const next = useCallback(() => perform(async () => {
     const changed = normalize(await callNative<AppState>('next_wallpaper'));
     setState(changed);
@@ -71,5 +82,5 @@ export function useWallta() {
     }, 5000);
     return () => clearInterval(timer);
   }, [loaded]);
-  return { state, capabilities, media, busy, loaded, notice, notify, save, next, toggle, refresh: () => perform(refresh), perform };
+  return { state, capabilities, media, busy, loaded, notice, notify, save, saveSource, next, toggle, refresh: () => perform(refresh), perform };
 }

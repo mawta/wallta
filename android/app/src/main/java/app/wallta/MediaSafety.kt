@@ -4,6 +4,7 @@ import java.net.URI
 
 /** Pure policies shared by preview decoding, provider credentials and both rotation paths. */
 object MediaSafety {
+    fun forSource(items: List<Media>, sourceId: String?): List<Media> = if (sourceId == null) items else items.filter { it.sourceId == sourceId }
     /** Call after omitted secrets have been merged with their saved values. */
     fun sourceConfig(source: org.json.JSONObject): String = org.json.JSONArray().put(source.optString("kind")).put(source.optString("location"))
         .put(source.optBoolean("recursive")).put(source.optBoolean("enabled", true)).put(source.optString("username")).put(source.optString("password"))

@@ -77,8 +77,9 @@ export function parseManifest(data: unknown, base: string, sourceId: string): Me
   return items;
 }
 
-export function validateSource(source: Pick<Source, 'kind' | 'location' | 'name'>): string | null {
+export function validateSource(source: Pick<Source, 'kind' | 'location' | 'name'> & Partial<Pick<Source, 'enabled' | 'google'>>): string | null {
   if (!source.name.trim()) return 'Đặt tên cho nguồn ảnh này.';
+  if (source.kind === 'drive' && !source.location.trim() && source.google?.connected && source.enabled === false) return null;
   if (!source.location.trim()) return source.kind === 'local' ? 'Chọn một thư mục ảnh.' : 'Nhập địa chỉ nguồn ảnh.';
   if (source.kind === 'local' || source.kind === 'drive' || source.kind === 'photos') return null;
   try {

@@ -68,7 +68,7 @@ pub fn prune_cache_owners(runtime: &mut RuntimeState, cache: &Path) {
 
 pub fn source_fingerprint(source: &Source) -> String {
     // Only the hash is persisted. Credential values remain in Credential Manager.
-    let identity = serde_json::json!([
+    let mut identity = serde_json::json!([
         source.id,
         source.kind,
         source.location,
@@ -79,6 +79,14 @@ pub fn source_fingerprint(source: &Source) -> String {
         source.api_key,
         source.access_token
     ]);
+    // Bind cached content to the OAuth grant, even when account identity is unavailable.
+    // Preserve legacy fingerprints for sources that have no Google connection metadata.
+    if let Some(connection) = &source.google {
+        identity
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!(connection));
+    }
     format!("{:x}", Sha256::digest(identity.to_string().as_bytes()))
 }
 pub fn offline_items(source: &Source, catalog: Option<&Catalog>, cache: &Path) -> Vec<MediaItem> {
@@ -295,5 +303,73 @@ fn put_secret(_: &str, _: &str, value: Option<&str>) -> Result<(), String> {
         Err("Secure credential storage is only available in the Windows build.".into())
     } else {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod google_identity_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn source(account: Option<&str>, connection_id: Option<&str>) -> Source {
+        serde_json::from_value(json!({
+            "id":"drive", "name":"Drive", "kind":"drive", "location":"same-folder",
+            "google":{"provider":"drive", "connected":true, "account":account, "connectionId":connection_id}
+        })).unwrap()
+    }
+
+    #[test]
+    fn reconnecting_same_folder_with_another_account_invalidates_fingerprint() {
+        let first = source(Some("a@example.com"), Some("grant"));
+        let second = source(Some("b@example.com"), Some("grant"));
+        assert_ne!(source_fingerprint(&first), source_fingerprint(&second));
+    }
+
+    #[test]
+    fn sources_without_google_metadata_keep_their_legacy_fingerprint() {
+        let mut source = source(None, None);
+        source.google = None;
+        assert_eq!(
+            source_fingerprint(&source),
+            "13954a5ad21d4a23f176a976a3909381758d647cace615f9cd8bb110259ee2d5"
+        );
+    }
+
+    #[test]
+    fn new_grant_invalidates_fingerprint_when_account_is_unavailable() {
+        let first = source(None, Some("grant-a"));
+        let second = source(None, Some("grant-b"));
+        assert_ne!(source_fingerprint(&first), source_fingerprint(&second));
+        let mut with_secret = first.clone();
+        with_secret.access_token = Some("different-token".into());
+        assert_ne!(source_fingerprint(&first), source_fingerprint(&with_secret));
+    }
+
+    #[test]
+    fn reconnect_purges_old_cached_catalog_and_offline_fallback() {
+        let cache = tempfile::tempdir().unwrap();
+        let old = source(None, Some("grant-a"));
+        let new = source(None, Some("grant-b"));
+        let id = "a".repeat(64);
+        let media = MediaItem {
+            id: id.clone(),
+            name: "Old account image".into(),
+            url: "https://example.com/image.jpg".into(),
+            source_id: old.id.clone(),
+        };
+        let file = cache.path().join(format!("{id}.img"));
+        fs::write(&file, b"cached-old-image").unwrap();
+        let catalog = Catalog {
+            fingerprint: source_fingerprint(&old),
+            items: vec![media.clone()],
+        };
+        assert!(offline_items(&new, Some(&catalog), cache.path()).is_empty());
+        let mut runtime = RuntimeState::default();
+        runtime.catalogs.insert(old.id.clone(), catalog);
+        own_cache(&mut runtime, &media, &old);
+        reconcile_catalogs(&mut runtime, &[new], cache.path());
+        assert!(runtime.catalogs.is_empty());
+        assert!(runtime.cache_owners.is_empty());
+        assert!(!file.exists());
     }
 }

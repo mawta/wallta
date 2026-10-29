@@ -45,14 +45,15 @@ object Rotation {
 
 object WallpaperEngine {
     fun allowed(settings: JSONObject) = Policy.inSchedule(settings.optBoolean("scheduleEnabled"), settings.optJSONArray("days")?.let { a -> (0 until a.length()).map { a.getInt(it) }.toSet() } ?: emptySet(), settings.optString("startTime", "07:00"), settings.optString("endTime", "23:00"), LocalDateTime.now())
-    fun apply(context: Context, manual: Boolean = false): JSONObject {
+    fun apply(context: Context, manual: Boolean = false, sourceId: String? = null, startRunning: Boolean = false): JSONObject {
         val store = StateStore(context); val snapshot = synchronized(StateStore.lock) { store.state() to store.revision() }
         val initial = snapshot.first; val revision = snapshot.second; val settings = initial.getJSONObject("settings")
         if (!manual && (!initial.optBoolean("running") || !allowed(settings))) return store.state(true)
         val manager = WallpaperManager.getInstance(context)
         require(manager.isWallpaperSupported && manager.isSetWallpaperAllowed) { "Firmware does not permit changing the Home wallpaper. Use Wallta in Screensaver settings." }
         fun ensureCurrent() = synchronized(StateStore.lock) { check(store.revision() == revision && (manual || store.state().optBoolean("running")) && !Thread.currentThread().isInterrupted) { "Wallpaper operation cancelled by a newer setting" } }
-        val repo = MediaRepository(context, store); val items = repo.list()
+        val repo = MediaRepository(context, store); val items = MediaSafety.forSource(repo.list(), sourceId)
+        require(items.isNotEmpty()) { "Thư mục đã chọn chưa có ảnh khả dụng." }
         val loaded = Rotation.loadUsable(store, items, settings, ensureCurrent = ::ensureCurrent, discard = { bitmap: Bitmap -> bitmap.recycle() }) { candidate ->
             val file = repo.image(candidate)
             render(file.absolutePath, settings.optString("fit", "fill"), manager.desiredMinimumWidth.coerceIn(720, 2560), manager.desiredMinimumHeight.coerceIn(720, 2560), settings.optBoolean("blurBackground"))
@@ -64,7 +65,7 @@ object WallpaperEngine {
                 val result = manager.setBitmap(bitmap, null, true, WallpaperManager.FLAG_SYSTEM)
                 check(result != 0) { "Firmware rejected the wallpaper" }
                 Rotation.consumed(store, items, media)
-                return store.mutateState { it.put("current", media.json()).put("lastChanged", Instant.now().toString()).put("error", JSONObject.NULL) }
+                return store.mutateState { it.put("current", media.json()).put("lastChanged", Instant.now().toString()).put("error", JSONObject.NULL); if (startRunning) it.put("running", true) }
             }
         } finally { bitmap.recycle() }
     }

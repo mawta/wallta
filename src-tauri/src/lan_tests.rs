@@ -199,9 +199,13 @@ fn stop_closes_partial_upload_and_erases_staging() {
 }
 #[test]
 fn expiry_and_failed_accept_clean_unconfirmed_files_only() {
-    let (root, manager, status) = fixture(Duration::from_millis(100), vec![]);
+    // Leave time for the real TCP upload on busy CI runners before testing expiry.
+    let (root, manager, status) = fixture(Duration::from_secs(2), vec![]);
     assert_eq!(code(&upload(&status.urls[0], &png())), 200);
-    std::thread::sleep(Duration::from_millis(180));
+    let expiry_deadline = Instant::now() + Duration::from_secs(4);
+    while manager.status().active && Instant::now() < expiry_deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
     assert!(!manager.status().active);
     assert_eq!(
         fs::read_dir(manager.root.join("staging")).unwrap().count(),
