@@ -36,6 +36,23 @@ it('keeps AI unavailable on Android TV', async () => {
   expect(host.querySelector('option[value="ai"]')?.hasAttribute('disabled')).toBe(true);
   expect(host.textContent).toContain('AI chỉ có trên Windows');
 });
+it('can preview and save completed images after a later image fails', async () => {
+  const partial = { ...ready, phase: 'error', total: 3, error: 'AI processing exceeded the 10 minute image limit.' };
+  vi.mocked(callNative).mockImplementation(async command => (command === 'upscale_status' ? partial : source) as never);
+  await act(async () => root.render(<UpscaleDialog platform="windows" media={[]} onSaved={onSaved} onClose={onClose} />));
+  expect(host.querySelector('img[alt="Sau"]')?.getAttribute('src')).toBe('/after.jpg');
+  expect(host.textContent).toContain('1/3 ảnh');
+  expect(host.textContent).toContain(partial.error);
+  await click('Lưu ảnh 4K');
+  expect(callNative).toHaveBeenCalledWith('upscale_save', { jobId: 'job' });
+  expect(onSaved).toHaveBeenCalledWith(source, false);
+});
+it('does not offer saving when an error has no completed images', async () => {
+  vi.mocked(callNative).mockResolvedValue({ ...ready, phase: 'error', completed: 0, results: [], error: 'AI failed' } as never);
+  await act(async () => root.render(<UpscaleDialog platform="windows" media={[]} onSaved={onSaved} onClose={onClose} />));
+  expect(Array.from(host.querySelectorAll('button')).some(button => button.textContent?.includes('Lưu ảnh 4K'))).toBe(false);
+  expect(host.textContent).toContain('AI failed');
+});
 it('cancels the active native job when closing without saving', async () => {
   vi.mocked(callNative).mockImplementation(async command => (command === 'upscale_status' ? { ...ready, phase: 'processing', results: [] } : { ...ready, phase: 'cancelled', results: [] }) as never);
   await act(async () => root.render(<UpscaleDialog platform="windows" media={[]} onSaved={onSaved} onClose={onClose} />));

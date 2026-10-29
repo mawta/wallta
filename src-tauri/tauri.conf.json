@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Wallta", "version": "0.1.5", "identifier": "app.wallta.desktop",
+  "productName": "Wallta", "version": "0.1.6", "identifier": "app.wallta.desktop",
   "build": { "beforeDevCommand": "npm run dev", "devUrl": "http://localhost:1420", "beforeBuildCommand": "npm run build", "frontendDist": "../dist" },
   "app": {
     "windows": [{ "label": "main", "title": "Wallta", "width": 1280, "height": 850, "minWidth": 900, "minHeight": 650 }],

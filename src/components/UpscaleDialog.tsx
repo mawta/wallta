@@ -20,6 +20,7 @@ export function UpscaleDialog({ platform, media, initialIds = [], onSaved, onClo
   const [resultIndex, setResultIndex] = useState(0);
   const active = ['downloading', 'processing'].includes(status.phase);
   const result = status.results[resultIndex] || status.results[0];
+  const hasResults = (status.phase === 'ready' || status.phase === 'error') && status.results.length > 0;
   const receive = (next: Status) => { currentJob.current = next.jobId; if (alive.current) setStatus(next); };
   useEffect(() => {
     alive.current = true; const element = dialog.current; element?.showModal();
@@ -65,7 +66,7 @@ export function UpscaleDialog({ platform, media, initialIds = [], onSaved, onClo
   const reset = () => void run(async () => { await cancel(); saved.current = false; currentJob.current = null; setStatus(idle); setResultIndex(0); });
   return <dialog ref={dialog} className="source-dialog upscale-dialog" aria-labelledby="upscale-title" onCancel={event => { event.preventDefault(); if (!busy) close(); }}>
     <div className="dialog-heading"><h2 id="upscale-title">Nâng ảnh lên 4K</h2><button className="icon-button" aria-label="Đóng" disabled={busy} onClick={close}><X size={20} /></button></div>
-    {!active && status.phase !== 'ready' && <>
+    {!active && !hasResults && <>
       <label className="field">Chế độ<select value={mode} disabled={busy} onChange={event => setMode(event.target.value as Mode)}><option value="fast">Nhanh</option><option value="ai" disabled={platform !== 'windows'}>AI</option></select></label>
       <p className="muted small">{mode === 'ai' ? 'Xử lý trên máy. Lần đầu tải bộ AI; cần GPU hỗ trợ Vulkan. AI có thể thay đổi chi tiết.' : 'Phóng ảnh giữ tỷ lệ, tối đa khung 4K. Giữ nguyên ảnh gốc.'}{platform !== 'windows' && ' AI chỉ có trên Windows.'}</p>
       <div className="subsection-heading"><h3>Chọn ảnh</h3><span>{selected.length}/50</span></div>
@@ -74,10 +75,10 @@ export function UpscaleDialog({ platform, media, initialIds = [], onSaved, onClo
       <div className="dialog-footer"><button className="button secondary" disabled={busy} onClick={close}>Đóng</button><button className="button primary" disabled={busy || !isNative() || !selected.length} onClick={start}>Tạo ảnh 4K</button></div>
     </>}
     {active && <div className="upscale-progress" role="status"><LoaderCircle className="spin" size={26} /><strong>{status.phase === 'downloading' ? 'Chuẩn bị bộ AI…' : `Đang xử lý ${Math.min(status.completed + 1, status.total)}/${status.total}`}</strong><progress max={Math.max(1, status.total)} value={status.completed} /><button className="button secondary" disabled={busy} onClick={() => void run(cancel)}>Hủy xử lý</button></div>}
-    {status.phase === 'ready' && result && <>
+    {hasResults && result && <>
       {status.results.length > 1 && <label className="field">Ảnh kết quả<select value={resultIndex} onChange={event => setResultIndex(Number(event.target.value))}>{status.results.map((item, index) => <option value={index} key={item.id}>{item.name}</option>)}</select></label>}
       <div className="upscale-comparison"><figure><img src={imageUrl(result.originalPreview)} alt="Trước" /><figcaption>Trước</figcaption></figure><figure><img src={imageUrl(result.resultPreview)} alt="Sau" /><figcaption>Sau · {result.width} × {result.height}</figcaption></figure></div>
-      <p className="muted small">{status.completed} ảnh · Lưu riêng vào nguồn “Ảnh 4K”.</p>
+      <p className="muted small">{status.completed}/{status.total} ảnh · Lưu riêng vào nguồn “Ảnh 4K”.</p>
       <button className="text-button" disabled={busy} onClick={reset}>Tạo bộ ảnh khác</button>
       <label className="checkbox-row"><input type="checkbox" checked={apply} disabled={busy} onChange={event => setApply(event.target.checked)} />Áp dụng sau khi lưu</label>
       <div className="dialog-footer"><button className="button secondary" disabled={busy} onClick={close}>Đóng</button><button className="button primary" disabled={busy} onClick={save}>{busy && <LoaderCircle className="spin" size={16} />}Lưu ảnh 4K</button></div>

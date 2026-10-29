@@ -6,6 +6,8 @@ use image::{
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+#[cfg(test)]
+use std::time::{Duration, Instant};
 use std::{
     fs,
     io::{Cursor, Read},
@@ -14,7 +16,6 @@ use std::{
         atomic::{AtomicBool, Ordering},
         Arc, Mutex,
     },
-    time::{Duration, Instant},
 };
 
 #[path = "upscale_cleanup.rs"]
@@ -196,15 +197,14 @@ impl UpscaleManager {
                     } else if let Err(error) = result {
                         state.status.phase = Phase::Error;
                         state.status.error = Some(error);
-                        state.status.results.clear();
-                        state.outputs.clear();
                     } else {
                         state.status.phase = Phase::Ready;
                         state.status.message = Some(
                             "Results are ready. Save to create a local Ảnh 4K collection.".into(),
                         );
                     }
-                    matches!(state.status.phase, Phase::Cancelled | Phase::Error)
+                    state.status.phase == Phase::Cancelled
+                        || (state.status.phase == Phase::Error && state.outputs.is_empty())
                 };
                 if should_cleanup {
                     let _ = fs::remove_dir_all(manager.job_directory(&job_id));
@@ -259,7 +259,10 @@ impl UpscaleManager {
             if let Some(saved) = &state.saved {
                 return Ok(saved.clone());
             }
-            if state.status.phase != Phase::Ready || state.running || state.outputs.is_empty() {
+            if !matches!(state.status.phase, Phase::Ready | Phase::Error)
+                || state.running
+                || state.outputs.is_empty()
+            {
                 return Err("Wait for all results before saving.".into());
             }
             (state.outputs.clone(), state.revision, state.cancel.clone())
@@ -342,13 +345,11 @@ impl UpscaleManager {
         fs::create_dir_all(&cache).map_err(|e| e.to_string())?;
         prune_results(&cache, CACHE_BUDGET)?;
         let mut runtime = None;
-        let started = Instant::now();
         let mut disk_used = 0;
         for (index, id) in ids.iter().enumerate() {
             self.check(cancel, revision)?;
-            if started.elapsed() > Duration::from_secs(30 * 60) {
-                return Err("Processing exceeded the 30 minute job limit.".into());
-            }
+            // Each AI invocation has its own timeout. A progressing batch may
+            // legitimately take longer than 30 minutes across multiple images.
             {
                 let mut state = self.inner.lock().map_err(|e| e.to_string())?;
                 state.status.phase = Phase::Processing;
@@ -654,6 +655,64 @@ mod tests {
         assert_eq!(engine.snapshot().unwrap().sources.len(), 1);
         assert_eq!(fs::read(&original).unwrap(), b"original untouched");
         assert!(Path::new(&first.location).join("001.jpg").is_file());
+    }
+
+    #[test]
+    fn later_image_failure_keeps_completed_full_resolution_results_saveable() {
+        let temp = tempfile::tempdir().unwrap();
+        let engine = Arc::new(
+            Engine::new(
+                crate::storage::Store::new(temp.path().join("data"), temp.path().join("cache"))
+                    .unwrap(),
+            )
+            .unwrap(),
+        );
+        let original = temp.path().join("original.png");
+        let bytes = png_test_image();
+        fs::write(&original, &bytes).unwrap();
+        let source: Source = serde_json::from_value(serde_json::json!({
+            "id":"original", "name":"Original", "kind":"local", "location":temp.path()
+        }))
+        .unwrap();
+        let media = crate::providers::item(original.to_string_lossy().into(), None, &source.id);
+        {
+            let mut state = engine.inner.lock().unwrap();
+            state.state.sources.push(source);
+            state.media.push(media.clone());
+        }
+        let manager = Arc::new(UpscaleManager::new(engine.clone()));
+        let started = manager
+            .start(vec![media.id, "missing-image".into()], UpscaleMode::Fast)
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(20);
+        let status = loop {
+            let status = manager.status().unwrap();
+            if status.phase == Phase::Error {
+                break status;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "Worker did not finish: {:?}",
+                status
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        assert_eq!(status.completed, 1);
+        assert_eq!(status.total, 2);
+        assert_eq!(
+            status.results.len(),
+            1,
+            "A later failure discarded a completed image"
+        );
+        assert!(Path::new(&status.results[0].result_preview).is_file());
+        let saved = manager.save(started.job_id.as_deref().unwrap()).unwrap();
+        let saved_bytes = fs::read(Path::new(&saved.location).join("001.jpg")).unwrap();
+        assert_eq!(decode(&saved_bytes).unwrap().dimensions(), (38, 3840));
+        assert_eq!(fs::read(original).unwrap(), bytes);
+        assert_eq!(
+            manager.save(started.job_id.as_deref().unwrap()).unwrap().id,
+            saved.id
+        );
     }
 
     #[test]
