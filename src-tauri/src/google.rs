@@ -49,10 +49,11 @@ fn replace_session(
     all: &mut HashMap<String, Arc<Session>>,
     source_id: String,
     session: Arc<Session>,
+    now: Instant,
 ) -> Result<Vec<Arc<Session>>, String> {
     let mut retired = Vec::new();
     all.retain(|_, old| {
-        if old.started.elapsed() < Duration::from_secs(1800) {
+        if now.saturating_duration_since(old.started) < Duration::from_secs(1800) {
             return true;
         }
         old.cancelled.store(true, Ordering::SeqCst);
@@ -891,7 +892,7 @@ pub async fn google_begin(
     });
     let retired = {
         let mut all = sessions().lock().map_err(|e| e.to_string())?;
-        replace_session(&mut all, source_id.clone(), session.clone())?
+        replace_session(&mut all, source_id.clone(), session.clone(), Instant::now())?
     };
     // Release SESSIONS before taking the engine state lock: saves take them in reverse order.
     for old in retired {
@@ -943,13 +944,13 @@ pub async fn google_disconnect(source_id: String) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn pending_session(directory: Option<PathBuf>, elapsed: Duration) -> Arc<Session> {
+    fn pending_session(directory: Option<PathBuf>, started: Instant) -> Arc<Session> {
         Arc::new(Session {
             status: Mutex::new(GoogleStatus::default()),
             cancelled: AtomicBool::new(false),
             credential: Mutex::new(None),
             import_directory: Mutex::new(directory),
-            started: Instant::now() - elapsed,
+            started,
         })
     }
     #[test]
@@ -970,16 +971,20 @@ mod tests {
         let mut saved_alias = photo_source("saved", &saved.join("..").join("saved"));
         saved_alias.enabled = false;
         engine.inner.lock().unwrap().state.sources.push(saved_alias);
-        let replaced = pending_session(Some(first.clone()), Duration::ZERO);
-        let expired = pending_session(Some(partial.clone()), Duration::from_secs(1801));
-        let referenced = pending_session(Some(saved.clone()), Duration::from_secs(1801));
+        let started = Instant::now();
+        let now = started + Duration::from_secs(1801);
+        let replaced = pending_session(Some(first.clone()), now);
+        let expired = pending_session(Some(partial.clone()), started);
+        let referenced = pending_session(Some(saved.clone()), started);
         let mut all = HashMap::from([
             ("replaced".into(), replaced.clone()),
             ("expired".into(), expired.clone()),
             ("saved".into(), referenced.clone()),
         ]);
-        let replacement = pending_session(None, Duration::ZERO);
-        for session in replace_session(&mut all, "replaced".into(), replacement.clone()).unwrap() {
+        let replacement = pending_session(None, now);
+        for session in
+            replace_session(&mut all, "replaced".into(), replacement.clone(), now).unwrap()
+        {
             retire_session(&engine, &session, true).unwrap();
         }
         assert!(!first.exists());
@@ -1002,7 +1007,7 @@ mod tests {
             storage::Store::new(root.path().into(), root.path().join("cache")).unwrap(),
         )
         .unwrap();
-        let session = pending_session(None, Duration::ZERO);
+        let session = pending_session(None, Instant::now());
         let deadline = Instant::now() + Duration::from_secs(30);
         let partial = prepare_import_directory(&session, root.path(), "source", deadline).unwrap();
         std::fs::write(partial.join("partial.jpg"), b"partial").unwrap();
@@ -1029,7 +1034,7 @@ mod tests {
         durable.sources.push(photo_source("saved", &imported));
         // State is durable, but a later save step failed before publishing it in memory.
         engine.store.save(&durable).unwrap();
-        let session = pending_session(Some(imported.clone()), Duration::ZERO);
+        let session = pending_session(Some(imported.clone()), Instant::now());
         retire_session(&engine, &session, true).unwrap();
         assert!(imported.is_dir());
     }
