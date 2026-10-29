@@ -22,7 +22,7 @@ android {
     }
     namespace = "app.wallta"
     compileSdk = 35
-    defaultConfig { applicationId = "app.wallta"; minSdk = 26; targetSdk = 35; versionCode = 6; versionName = "0.1.5" }
+    defaultConfig { applicationId = "app.wallta"; minSdk = 26; targetSdk = 35; versionCode = 7; versionName = "0.1.6" }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     kotlinOptions { jvmTarget = "17" }
     buildTypes { release { isMinifyEnabled = false; if (hasReleaseSigning) signingConfig = signingConfigs.getByName("stableRelease") } }

@@ -6,6 +6,8 @@ use image::{
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+#[cfg(test)]
+use std::time::{Duration, Instant};
 use std::{
     fs,
     io::{Cursor, Read},
@@ -14,7 +16,6 @@ use std::{
         atomic::{AtomicBool, Ordering},
         Arc, Mutex,
     },
-    time::{Duration, Instant},
 };
 
 #[path = "upscale_cleanup.rs"]
@@ -196,15 +197,14 @@ impl UpscaleManager {
                     } else if let Err(error) = result {
                         state.status.phase = Phase::Error;
                         state.status.error = Some(error);
-                        state.status.results.clear();
-                        state.outputs.clear();
                     } else {
                         state.status.phase = Phase::Ready;
                         state.status.message = Some(
                             "Results are ready. Save to create a local Ảnh 4K collection.".into(),
                         );
                     }
-                    matches!(state.status.phase, Phase::Cancelled | Phase::Error)
+                    state.status.phase == Phase::Cancelled
+                        || (state.status.phase == Phase::Error && state.outputs.is_empty())
                 };
                 if should_cleanup {
                     let _ = fs::remove_dir_all(manager.job_directory(&job_id));
@@ -259,7 +259,10 @@ impl UpscaleManager {
             if let Some(saved) = &state.saved {
                 return Ok(saved.clone());
             }
-            if state.status.phase != Phase::Ready || state.running || state.outputs.is_empty() {
+            if !matches!(state.status.phase, Phase::Ready | Phase::Error)
+                || state.running
+                || state.outputs.is_empty()
+            {
                 return Err("Wait for all results before saving.".into());
             }
             (state.outputs.clone(), state.revision, state.cancel.clone())
@@ -342,13 +345,11 @@ impl UpscaleManager {
         fs::create_dir_all(&cache).map_err(|e| e.to_string())?;
         prune_results(&cache, CACHE_BUDGET)?;
         let mut runtime = None;
-        let started = Instant::now();
         let mut disk_used = 0;
         for (index, id) in ids.iter().enumerate() {
             self.check(cancel, revision)?;
-            if started.elapsed() > Duration::from_secs(30 * 60) {
-                return Err("Processing exceeded the 30 minute job limit.".into());
-            }
+            // Each AI invocation has its own timeout. A progressing batch may
+            // legitimately take longer than 30 minutes across multiple images.
             {
                 let mut state = self.inner.lock().map_err(|e| e.to_string())?;
                 state.status.phase = Phase::Processing;

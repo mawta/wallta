@@ -19,6 +19,8 @@ Mở **Nguồn ảnh → Chỉnh sửa**. Chọn thêm thư mục trên thiết 
 
 AI có thể làm mịn da, sai chữ hoặc tạo chi tiết khác ảnh gốc. Nên xem trước khi lưu. Tốc độ và khả năng chạy phụ thuộc GPU, RAM, driver và ảnh nguồn; chưa có kết quả đo trên mọi thiết bị. Android/TV chỉ hỗ trợ Nhanh; bản xem trước web cần bản cài để xử lý.
 
+Từ 0.1.6, AI trên Windows giới hạn 10 phút cho mỗi ảnh, không ngắt cả lô sau 30 phút. Nếu một ảnh gặp lỗi, lô dừng và vẫn có thể xem/lưu các ảnh đã hoàn thành, theo số lượng hiện trên màn hình. Ảnh chưa hoàn thành không được đưa vào bộ ảnh đã lưu. Hủy hoặc đóng khi chưa lưu sẽ xóa kết quả tạm; thay đổi nguồn/cài đặt khiến kết quả cũ không còn lưu được.
+
 Đổi nguồn/cài đặt trong khi xử lý làm kết quả cũ hết hiệu lực; tạo lại sau khi hoàn tất thay đổi. Đóng cửa sổ nâng ảnh khi chưa lưu sẽ hủy kết quả tạm. Ảnh đã lưu vẫn nằm trong dữ liệu ứng dụng và không bị xóa khi dọn cache.
 
 ## Bộ AI và giấy phép
