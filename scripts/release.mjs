@@ -6,7 +6,7 @@ import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 
 export const repository = 'mawta/wallta';
-export const releaseNotes = 'Lưu tài khoản Drive rồi chọn hoặc đổi thư mục ngay trên nguồn đã lưu. Ghi nhớ tài khoản và bộ ảnh Google Photos, hiển thị rõ nguồn đang dùng. Có thể lưu và áp dụng ngay, bật khởi động cùng Windows. Sửa lỗi theo dõi đăng nhập Google và cache khi đổi tài khoản.';
+export const releaseNotes = 'Hiện tài khoản Google đã kết nối trong Cài đặt và khi thêm nguồn Drive/Photos. Mở lại kết nối đã lưu mà không phải đăng nhập lại. Drive cho phép Lưu kết nối trước, chọn hoặc đổi thư mục bất cứ lúc nào; không tự mở trình chọn thư mục sau đăng nhập.';
 const readJson = async path => JSON.parse(await readFile(path,'utf8'));
 const sha256 = data => createHash('sha256').update(data).digest('hex');
 const requireValue = (value,message) => { if (!value) throw new Error(message); return value; };

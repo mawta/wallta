@@ -16,7 +16,7 @@ APK debug cũ dùng khóa ký khác nên có thể phải gỡ trước khi cài
 
 Use the public `mawta/wallta` repository for source and release downloads. Set these repository Actions secrets: `TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`, `WALLTA_ANDROID_KEYSTORE_BASE64`, `WALLTA_ANDROID_STORE_PASSWORD`, `WALLTA_ANDROID_KEY_ALIAS`, and `WALLTA_ANDROID_KEY_PASSWORD`. Keep encrypted backups of both signing keys and their passwords outside the repository; changing the Android key prevents normal upgrades, and changing the updater key requires a migration.
 
-Keep the application version aligned in `package.json`, both application entries in `package-lock.json`, the Wallta entries in `src-tauri/Cargo.toml` and `Cargo.lock`, `src-tauri/tauri.conf.json`, and `android/app/build.gradle.kts`. Increment Android `versionCode` for every release; 0.1.3 uses code 4. Keep `minSdk` at 26.
+Keep the application version aligned in `package.json`, both application entries in `package-lock.json`, the Wallta entries in `src-tauri/Cargo.toml` and `Cargo.lock`, `src-tauri/tauri.conf.json`, and `android/app/build.gradle.kts`. Increment Android `versionCode` for every release; 0.1.4 uses code 5. Keep `minSdk` at 26.
 
 Run `node --test scripts/release.test.mjs` and `node scripts/release.mjs privacy`. Push an existing stable tag such as `v0.1.2`, or run **Signed stable release** with that tag. The workflow checks out the tag, runs frontend/native tests, builds a signed Windows x64 NSIS installer and Android APK, and verifies the compiled APK identity. Normal pull-request builds need no signing secrets.
 

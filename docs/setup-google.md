@@ -9,7 +9,7 @@ Local, USB và **Gửi / nhận qua Wi-Fi** không cần Google Cloud, key hay t
 | Muốn kết nối | Cần tạo / chuẩn bị | Nhập trong Wallta |
 |---|---|---|
 | Drive công khai | Drive API + API key | Link thư mục + Google API key trong Thông tin kết nối |
-| Drive riêng, Windows | Drive API + OAuth Desktop app | Link thư mục + OAuth Client ID / secret nếu được cấp |
+| Drive riêng, Windows | Drive API + OAuth Desktop app | OAuth Client ID / secret nếu được cấp; chọn thư mục sau |
 | Drive riêng, Android / TV | Relay HTTPS + OAuth Web application | Link thư mục + địa chỉ Wallta Drive Relay |
 | Photos, Windows | Photos Picker API + OAuth Desktop app | OAuth Client ID / secret nếu được cấp |
 | Photos, điện thoại Android | Trình chọn ảnh hệ thống / cloud provider | Bấm kết nối và chọn ảnh, không nhập key |
@@ -40,7 +40,9 @@ Không cần OAuth Client ID cho cách này. Với ảnh riêng, giữ thư mụ
 
 ## Google Drive riêng trên Windows
 
-Tạo OAuth client loại **Desktop app**. Trong nguồn Drive, nhập link thư mục và OAuth Client ID; nhập client secret nếu Google cấp. Bấm Kết nối tài khoản Google, cấp quyền đọc Drive trong trình duyệt rồi lưu nguồn ảnh. Callback loopback `http://127.0.0.1:<port>/oauth/callback` dùng PKCE và state. Refresh token lưu trong Windows Credential Manager sau khi lưu nguồn thành công.
+Tạo OAuth client loại **Desktop app**. Trong nguồn Drive, nhập OAuth Client ID và client secret nếu Google cấp. Bấm **Kết nối tài khoản Google**, cấp quyền đọc Drive trong trình duyệt rồi **Lưu kết nối**. Không cần chọn thư mục ngay. Callback loopback `http://127.0.0.1:<port>/oauth/callback` dùng PKCE và state. Refresh token lưu trong Windows Credential Manager sau khi lưu nguồn thành công.
+
+Tài khoản đã lưu nằm ở **Cài đặt → Tài khoản đã kết nối → Quản lý**. Khi mở **Thêm nguồn → Google Drive**, chọn **Dùng kết nối** để mở lại tài khoản cũ, không cần nhập lại Client ID/secret. Bấm **Chọn / đổi thư mục** bất cứ lúc nào rồi **Lưu & áp dụng**. Form đăng nhập trống dành cho kết nối mới, không biểu thị kết nối cũ bị mất. Google Photos đã nhập cũng xuất hiện trong danh sách tài khoản để mở lại bộ ảnh hoặc chọn lại ảnh.
 
 Trong **Google Auth platform → Clients → Create client → Desktop app**, đặt tên như `Wallta Windows`. Không cần đăng ký redirect URI relay cho loại Desktop app. Dùng đúng Client ID của Desktop app; Wallta tự chọn cổng callback local. OAuth app ở Testing có thể cần kết nối lại khi Google làm refresh token hết hạn.
 

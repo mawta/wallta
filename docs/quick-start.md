@@ -2,8 +2,8 @@
 
 ## Cài đặt
 
-- Windows 10/11 x64: mở bộ cài `Wallta_0.1.3_x64-setup.exe`. Windows có thể cảnh báo nhà phát hành chưa xác định vì chưa ký Authenticode.
-- Android/Android TV 8+: cho phép cài từ nguồn đang dùng rồi mở `Wallta_0.1.3_android.apk`. Nếu đã cài APK debug cũ, có thể phải gỡ trước vì khác khóa ký. Gỡ app xóa cấu hình và ảnh đã nhập vào app; sao lưu ảnh cần giữ trước.
+- Windows 10/11 x64: mở bộ cài `Wallta_0.1.4_x64-setup.exe`. Windows có thể cảnh báo nhà phát hành chưa xác định vì chưa ký Authenticode.
+- Android/Android TV 8+: cho phép cài từ nguồn đang dùng rồi mở `Wallta_0.1.4_android.apk`. Nếu đã cài APK debug cũ, có thể phải gỡ trước vì khác khóa ký. Gỡ app xóa cấu hình và ảnh đã nhập vào app; sao lưu ảnh cần giữ trước.
 - Tải bộ cài tại GitHub Releases công khai, không cần đăng nhập. Không cần tài khoản Wallta.
 
 Từ 0.1.2, mở **Cài đặt → Cập nhật** để kiểm tra, tải và cài bản mới. App tự kiểm tra tối đa mỗi ngày khi mở. [Chi tiết cập nhật](updating.md).
@@ -28,7 +28,7 @@ Phím mũi tên di chuyển focus, Enter chọn. Trong ô nhập dùng Up/Down �
 - Chuyển ảnh giữa điện thoại và TV/PC: **Nguồn ảnh → Gửi / nhận qua Wi-Fi**. Máy kia mở QR/link bằng trình duyệt; nhận xong xác nhận thêm ảnh. [Các bước chuyển ảnh](local-transfer.md).
 
 - Link online: dùng một URL ảnh, JSON danh sách ảnh hoặc WebDAV. Một trang web chia sẻ thư mục bất kỳ không bảo đảm liệt kê được ảnh. [Định dạng JSON](../README.md#nguồn-online).
-- Drive: thư mục công khai cần API key. Drive riêng dùng OAuth Windows hoặc [relay HTTPS](../relay/README.md) trên Android/TV. Trên Windows, có thể lưu tài khoản trước, rồi bấm **Chọn thư mục** trên nguồn đã lưu. Chọn xong bấm **Lưu & áp dụng**; lần sau dùng **Đổi thư mục**. Tài khoản và thư mục được hiển thị ngay trên nguồn.
+- Drive: thư mục công khai cần API key. Drive riêng dùng OAuth Windows hoặc [relay HTTPS](../relay/README.md) trên Android/TV. Trên Windows, đăng nhập rồi bấm **Lưu kết nối**, chưa cần chọn thư mục. Lần sau mở **Cài đặt → Tài khoản đã kết nối → Quản lý**, hoặc **Thêm nguồn → Google Drive → Dùng kết nối**. Bấm **Chọn / đổi thư mục** bất cứ lúc nào, rồi **Lưu & áp dụng**. Client ID/secret không cần nhập lại khi dùng kết nối đã lưu; form kết nối mới dành cho tài khoản khác.
 - Photos: [cần thiết lập Google](setup-google.md). TV dùng Ambient với quyền Partner Program; Windows dùng Picker để nhập bộ ảnh đã chọn; điện thoại dùng trình chọn ảnh hệ thống/cloud nếu có. Bộ ảnh nhập không tự theo dõi album.
 
 Để ngắt nguồn, xóa nguồn trong **Nguồn ảnh**. **Dọn bộ nhớ** chỉ xóa cache, không xóa ảnh gốc trong thư mục của Sếpp; ảnh nhập riêng do Wallta quản lý sẽ bị xóa khi xóa chính nguồn nhập đó.
