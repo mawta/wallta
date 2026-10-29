@@ -2,6 +2,15 @@
 
 Đối chiếu mã nguồn và bằng chứng thực thi; CI build không thay thế kiểm tra trên thiết bị. Windows chưa ký Authenticode; APK từ 0.1.2 dùng khóa phát hành cố định.
 
+## Bổ sung trong 0.1.6
+
+- React: 64 tests và production build đạt, gồm hiển thị/xem trước/lưu các ảnh đã hoàn thành sau khi lô lỗi; không hiện nút lưu nếu chưa có ảnh hoàn thành.
+- Windows: 125 Rust tests và NSIS build đạt. Regression chạy worker thật: ảnh đầu thành công, ảnh sau lỗi, vẫn lưu được ảnh đầy đủ, giữ nguyên ảnh gốc và lưu lặp không nhân đôi nguồn. Test này đã thất bại trên mã cũ rồi đạt sau sửa.
+- Android: 98 tests đạt, không bỏ qua, và build APK đạt; không thay đổi bộ xử lý native Android. AI vẫn chỉ có trên Windows.
+- Công cụ phát hành: 12 tests, phiên bản 0.1.6/versionCode 7, định dạng và loại trừ tài liệu nội bộ/credential đạt.
+
+[Windows CI](https://github.com/mawta/wallta/actions/runs/40861115633) · [Android CI](https://github.com/mawta/wallta/actions/runs/40861115566) · [Thay đổi](https://github.com/mawta/wallta/pull/4). Kiểm tra giới hạn theo mã: đã bỏ đồng hồ 30 phút của cả lô Windows, giữ đồng hồ 10 phút mỗi ảnh AI, giới hạn số ảnh/dung lượng và hủy tiến trình con. Chưa chạy một lô AI thật kéo dài hơn 30 phút hoặc nâng cấp trên thiết bị thật.
+
 ## Bổ sung trong 0.1.5
 
 | Phạm vi | Kết quả |
