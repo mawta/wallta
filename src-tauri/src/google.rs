@@ -45,6 +45,58 @@ static CREDENTIAL_EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::Atomi
 fn sessions() -> &'static Mutex<HashMap<String, Arc<Session>>> {
     SESSIONS.get_or_init(|| Mutex::new(HashMap::new()))
 }
+fn replace_session(
+    all: &mut HashMap<String, Arc<Session>>,
+    source_id: String,
+    session: Arc<Session>,
+) -> Result<Vec<Arc<Session>>, String> {
+    let mut retired = Vec::new();
+    all.retain(|_, old| {
+        if old.started.elapsed() < Duration::from_secs(1800) {
+            return true;
+        }
+        old.cancelled.store(true, Ordering::SeqCst);
+        retired.push(old.clone());
+        false
+    });
+    if all.len() >= 32 && !all.contains_key(&source_id) {
+        return Err("Có quá nhiều kết nối đang chờ. Khởi động lại Wallta rồi thử lại.".into());
+    }
+    if let Some(old) = all.insert(source_id, session) {
+        old.cancelled.store(true, Ordering::SeqCst);
+        retired.push(old);
+    }
+    Ok(retired)
+}
+fn retire_session(engine: &Engine, session: &Session, discard_imports: bool) -> Result<(), String> {
+    session.cancelled.store(true, Ordering::SeqCst);
+    if !discard_imports {
+        return Ok(());
+    }
+    // Match save_state's lock order, and retain the state lock until deletion finishes.
+    // Neither worker writes nor a concurrent save may publish another reference during cleanup.
+    let runtime = engine.inner.lock().map_err(|e| e.to_string())?;
+    let _guard = CREDENTIAL_LOCK.lock().map_err(|e| e.to_string())?;
+    let directory = session
+        .import_directory
+        .lock()
+        .map_err(|e| e.to_string())?
+        .clone();
+    if let Some(directory) = directory {
+        let mut sources = runtime.state.sources.clone();
+        // A save can persist state before a later step fails. Protect those durable references too.
+        match engine.store.load() {
+            Ok(saved) => sources.extend(saved.sources),
+            Err(_) => return Ok(()),
+        }
+        cleanup_import_directories(
+            &engine.store.root,
+            std::iter::once(directory.as_path()),
+            &sources,
+        );
+    }
+    Ok(())
+}
 #[derive(Clone, Serialize, Deserialize)]
 struct Credential {
     client_id: String,
@@ -236,21 +288,7 @@ pub async fn google_cancel(
             .map_err(|e| e.to_string())?
             .remove(&source_id);
         if let Some(session) = session {
-            session.cancelled.store(true, Ordering::SeqCst);
-            let saved = engine.snapshot()?;
-            let _guard = CREDENTIAL_LOCK.lock().map_err(|e| e.to_string())?;
-            if discard_imports {
-                if let Some(directory) = session
-                    .import_directory
-                    .lock()
-                    .map_err(|e| e.to_string())?
-                    .as_ref()
-                {
-                    if can_discard_import(&engine.store.root, directory, &saved.sources) {
-                        let _ = std::fs::remove_dir_all(directory);
-                    }
-                }
-            }
+            retire_session(&engine, &session, discard_imports)?;
         }
         Ok(())
     })
@@ -580,15 +618,19 @@ fn import_directory(root: &std::path::Path, source_id: &str) -> PathBuf {
     root.join("google-import")
         .join(format!("{source_id}-{}", random_string(24)))
 }
-fn can_discard_import(
+fn prepare_import_directory(
+    session: &Session,
     root: &std::path::Path,
-    directory: &std::path::Path,
-    sources: &[Source],
-) -> bool {
-    directory.parent() == Some(root.join("google-import").as_path())
-        && !sources
-            .iter()
-            .any(|source| std::path::Path::new(&source.location) == directory)
+    source_id: &str,
+    deadline: Instant,
+) -> Result<PathBuf, String> {
+    let _guard = CREDENTIAL_LOCK.lock().map_err(|e| e.to_string())?;
+    check_cancel(session, deadline)?;
+    let mut pending = session.import_directory.lock().map_err(|e| e.to_string())?;
+    let directory = import_directory(root, source_id);
+    std::fs::create_dir_all(&directory).map_err(|e| e.to_string())?;
+    *pending = Some(directory.clone());
+    Ok(directory)
 }
 
 /// Remove only imports formerly referenced by saved sources, after a successful save.
@@ -597,6 +639,20 @@ pub(crate) fn cleanup_obsolete_imports(
     root: &std::path::Path,
     before: &[Source],
     after: &[Source],
+) {
+    cleanup_import_directories(
+        root,
+        before
+            .iter()
+            .filter(|source| source.kind == "local")
+            .map(|source| std::path::Path::new(&source.location)),
+        after,
+    );
+}
+fn cleanup_import_directories<'a>(
+    root: &std::path::Path,
+    directories: impl Iterator<Item = &'a std::path::Path>,
+    sources: &[Source],
 ) {
     let Ok(app_root) = root.canonicalize() else {
         return;
@@ -615,7 +671,7 @@ pub(crate) fn cleanup_obsolete_imports(
         return;
     }
     let mut references = Vec::new();
-    for source in after {
+    for source in sources {
         match std::path::Path::new(&source.location).canonicalize() {
             Ok(path) => references.push(path),
             // An unresolved local alias may still refer to a candidate. Retain data if uncertain.
@@ -623,8 +679,8 @@ pub(crate) fn cleanup_obsolete_imports(
             Err(_) => (),
         }
     }
-    for source in before.iter().filter(|source| source.kind == "local") {
-        let Ok(target) = std::path::Path::new(&source.location).canonicalize() else {
+    for directory in directories {
+        let Ok(target) = directory.canonicalize() else {
             continue;
         };
         if !target.is_absolute()
@@ -698,9 +754,7 @@ fn import_picker(
             ..Default::default()
         },
     );
-    let directory = import_directory(root, source_id);
-    *session.import_directory.lock().map_err(|e| e.to_string())? = Some(directory.clone());
-    std::fs::create_dir_all(&directory).map_err(|e| e.to_string())?;
+    let directory = prepare_import_directory(session, root, source_id, deadline)?;
     let mut page = String::new();
     let mut count = 0;
     let mut total = 0u64;
@@ -835,22 +889,15 @@ pub async fn google_begin(
         import_directory: Mutex::new(None),
         started: Instant::now(),
     });
-    {
+    let retired = {
         let mut all = sessions().lock().map_err(|e| e.to_string())?;
-        all.retain(|_, session| {
-            let keep = session.started.elapsed() < Duration::from_secs(1800);
-            if !keep {
-                session.cancelled.store(true, Ordering::SeqCst);
-            }
-            keep
-        });
-        if all.len() >= 32 && !all.contains_key(&source_id) {
-            return Err("Có quá nhiều kết nối đang chờ. Khởi động lại Wallta rồi thử lại.".into());
-        }
-        if let Some(old) = all.insert(source_id.clone(), session.clone()) {
-            old.cancelled.store(true, Ordering::SeqCst);
-        }
+        replace_session(&mut all, source_id.clone(), session.clone())?
+    };
+    // Release SESSIONS before taking the engine state lock: saves take them in reverse order.
+    for old in retired {
+        let _ = retire_session(engine.inner(), &old, true);
     }
+    let engine = engine.inner().clone();
     let root = engine.store.root.clone();
     std::thread::spawn(move || {
         if let Err(error) = connect(
@@ -861,6 +908,7 @@ pub async fn google_begin(
             client_secret,
             root,
         ) {
+            let _ = retire_session(&engine, &session, true);
             set_status(
                 &session,
                 GoogleStatus {
@@ -895,6 +943,96 @@ pub async fn google_disconnect(source_id: String) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn pending_session(directory: Option<PathBuf>, elapsed: Duration) -> Arc<Session> {
+        Arc::new(Session {
+            status: Mutex::new(GoogleStatus::default()),
+            cancelled: AtomicBool::new(false),
+            credential: Mutex::new(None),
+            import_directory: Mutex::new(directory),
+            started: Instant::now() - elapsed,
+        })
+    }
+    #[test]
+    fn replaced_and_expired_sessions_discard_only_unsaved_imports() {
+        let root = tempfile::tempdir().unwrap();
+        let import_root = root.path().join("google-import");
+        let first = import_root.join("first");
+        let partial = import_root.join("partial");
+        let saved = import_root.join("saved");
+        for directory in [&first, &partial, &saved] {
+            std::fs::create_dir_all(directory).unwrap();
+            std::fs::write(directory.join("image.jpg"), b"keep-image").unwrap();
+        }
+        let engine = Engine::new(
+            storage::Store::new(root.path().into(), root.path().join("cache")).unwrap(),
+        )
+        .unwrap();
+        let mut saved_alias = photo_source("saved", &saved.join("..").join("saved"));
+        saved_alias.enabled = false;
+        engine.inner.lock().unwrap().state.sources.push(saved_alias);
+        let replaced = pending_session(Some(first.clone()), Duration::ZERO);
+        let expired = pending_session(Some(partial.clone()), Duration::from_secs(1801));
+        let referenced = pending_session(Some(saved.clone()), Duration::from_secs(1801));
+        let mut all = HashMap::from([
+            ("replaced".into(), replaced.clone()),
+            ("expired".into(), expired.clone()),
+            ("saved".into(), referenced.clone()),
+        ]);
+        let replacement = pending_session(None, Duration::ZERO);
+        for session in replace_session(&mut all, "replaced".into(), replacement.clone()).unwrap() {
+            retire_session(&engine, &session, true).unwrap();
+        }
+        assert!(!first.exists());
+        assert!(!partial.exists());
+        assert!(saved.is_dir());
+        assert_eq!(
+            std::fs::read(saved.join("image.jpg")).unwrap(),
+            b"keep-image"
+        );
+        assert!(replaced.cancelled.load(Ordering::SeqCst));
+        assert!(expired.cancelled.load(Ordering::SeqCst));
+        assert!(referenced.cancelled.load(Ordering::SeqCst));
+        assert_eq!(all.len(), 1);
+        assert!(Arc::ptr_eq(all.get("replaced").unwrap(), &replacement));
+    }
+    #[test]
+    fn failed_partial_import_is_removed_and_cannot_be_recreated_after_cancel() {
+        let root = tempfile::tempdir().unwrap();
+        let engine = Engine::new(
+            storage::Store::new(root.path().into(), root.path().join("cache")).unwrap(),
+        )
+        .unwrap();
+        let session = pending_session(None, Duration::ZERO);
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let partial = prepare_import_directory(&session, root.path(), "source", deadline).unwrap();
+        std::fs::write(partial.join("partial.jpg"), b"partial").unwrap();
+        retire_session(&engine, &session, true).unwrap();
+        assert!(!partial.exists());
+        assert!(prepare_import_directory(&session, root.path(), "source", deadline).is_err());
+        assert_eq!(
+            std::fs::read_dir(root.path().join("google-import"))
+                .unwrap()
+                .count(),
+            0
+        );
+    }
+    #[test]
+    fn retiring_session_preserves_durable_reference_after_partially_failed_save() {
+        let root = tempfile::tempdir().unwrap();
+        let imported = root.path().join("google-import").join("durable");
+        std::fs::create_dir_all(&imported).unwrap();
+        let engine = Engine::new(
+            storage::Store::new(root.path().into(), root.path().join("cache")).unwrap(),
+        )
+        .unwrap();
+        let mut durable = engine.snapshot().unwrap();
+        durable.sources.push(photo_source("saved", &imported));
+        // State is durable, but a later save step failed before publishing it in memory.
+        engine.store.save(&durable).unwrap();
+        let session = pending_session(Some(imported.clone()), Duration::ZERO);
+        retire_session(&engine, &session, true).unwrap();
+        assert!(imported.is_dir());
+    }
     fn photo_source(id: &str, location: &std::path::Path) -> Source {
         serde_json::from_value(json!({"id":id,"name":"Photos","kind":"local","location":location,"google":{"provider":"photos","connected":true}})).unwrap()
     }
@@ -1005,16 +1143,27 @@ mod tests {
     }
     #[test]
     fn canceling_photos_reselection_preserves_the_saved_import() {
-        let root = std::path::Path::new("test-root");
-        let saved = root.join("google-import").join("saved");
-        let pending = root.join("google-import").join("pending");
+        let root = tempfile::tempdir().unwrap();
+        let saved = root.path().join("google-import").join("saved");
+        let pending = root.path().join("google-import").join("pending");
+        let outside = root.path().join("outside");
+        for directory in [&saved, &pending, &outside] {
+            std::fs::create_dir_all(directory).unwrap();
+        }
         let source: Source = serde_json::from_value(json!({
             "id":"source", "name":"Photos", "kind":"local", "location":saved
         }))
         .unwrap();
-        assert!(!can_discard_import(root, &saved, &[source.clone()]));
-        assert!(can_discard_import(root, &pending, &[source]));
-        assert!(!can_discard_import(root, &root.join("outside"), &[]));
+        cleanup_import_directories(
+            root.path(),
+            [&saved, &pending, &outside]
+                .map(PathBuf::as_path)
+                .into_iter(),
+            &[source],
+        );
+        assert!(saved.is_dir());
+        assert!(!pending.exists());
+        assert!(outside.is_dir());
     }
     #[test]
     fn pkce_uses_rfc7636_s256_vector() {
