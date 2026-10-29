@@ -1,15 +1,17 @@
 import { ArrowUpRight, HardDrive, Monitor, ShieldCheck, Trash2, Info, Play } from 'lucide-react';
 import { callNative, isNative } from '../lib/native';
 import { SectionTitle, SettingRow, Toggle } from '../components/ui';
-import type { AppState, Capabilities } from '../lib/types';
+import type { AppState, Capabilities, Source } from '../lib/types';
 import type { UpdatesController } from '../lib/updates';
 import { AppUpdates } from '../components/AppUpdates';
+import { SavedGoogleConnections } from '../components/SavedGoogleConnections';
 
-export function SettingsPage({ state, capabilities, onSave, busy, perform, notify, updates }: { state: AppState; capabilities: Capabilities | null; onSave: (state: AppState) => Promise<unknown>; busy: boolean; perform: (fn: () => Promise<void>) => Promise<unknown>; notify: (text: string, error?: boolean) => void; updates: UpdatesController }) {
+export function SettingsPage({ state, capabilities, onSave, busy, perform, notify, updates, onManageSource }: { state: AppState; capabilities: Capabilities | null; onSave: (state: AppState) => Promise<unknown>; busy: boolean; perform: (fn: () => Promise<void>) => Promise<unknown>; notify: (text: string, error?: boolean) => void; updates: UpdatesController; onManageSource: (source: Source) => void }) {
   const update = (settings: Partial<AppState['settings']>) => void onSave({ ...state, settings: { ...state.settings, ...settings } });
   return <>
     <SectionTitle title="Cài đặt" />
     <AppUpdates updates={updates} busy={busy} perform={perform} />
+    <SavedGoogleConnections sources={state.sources} busy={busy} onOpen={onManageSource} />
     <section className="panel settings-panel"><h3><Monitor size={18} /> Thiết bị</h3>
       <SettingRow title="Khởi động cùng thiết bị" description={capabilities?.platform === 'windows' ? 'Chạy trong khay khi đăng nhập.' : 'Khôi phục lịch sau khi khởi động lại.'}><Toggle checked={state.settings.autostart} label="Khởi động cùng thiết bị" onChange={() => update({ autostart: !state.settings.autostart })} disabled={busy || !isNative()} /></SettingRow>
       <SettingRow title="Chỉ tải ảnh qua Wi-Fi"><Toggle checked={state.settings.wifiOnly} label="Chỉ tải ảnh qua Wi-Fi" onChange={() => update({ wifiOnly: !state.settings.wifiOnly })} disabled={busy || !capabilities?.platform.startsWith('android')} /></SettingRow>
