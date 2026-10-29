@@ -2,6 +2,18 @@
 
 Đối chiếu mã nguồn và bằng chứng thực thi; CI build không thay thế kiểm tra trên thiết bị. Windows chưa ký Authenticode; APK từ 0.1.2 dùng khóa phát hành cố định.
 
+## Bổ sung trong 0.1.5
+
+| Phạm vi | Kết quả |
+|---|---|
+| React/TypeScript | 62 tests và production build đạt; nhiều thư mục, giữ kết nối, tiến độ/hủy, xem trước–sau và lưu bộ ảnh 4K |
+| Windows | 124 Rust tests đạt; nhiều thư mục, giới hạn ảnh, quản lý tiến trình AI và dọn kết quả tạm; NSIS build đạt |
+| Android | 98 tests trên Linux đạt, không bỏ qua; nhiều thư mục, EXIF, xử lý 4K và giữ kết nối Drive khi chưa chọn thư mục |
+| Công cụ phát hành | 12 tests, kiểm tra phiên bản 0.1.5/versionCode 6 và loại trừ tài liệu nội bộ/credential đạt |
+| AI thực thi | Runtime/model chính thức đã xác minh SHA-256; chạy Vulkan trên Radeon RX 470, ảnh fixture 16×16 → 64×64, exit 0; chưa đo chất lượng/tốc độ ảnh 4K |
+
+[Windows CI](https://github.com/mawta/wallta/actions/runs/40853163967) · [Android CI](https://github.com/mawta/wallta/actions/runs/40853163961) · [Thay đổi](https://github.com/mawta/wallta/pull/3). Chưa thử đầy đủ cài/nâng cấp, OAuth Google thật, thay wallpaper/reboot hoặc xử lý 4K trên điện thoại/TV thật. Chạy runtime AI riêng không thay thế kiểm thử luồng AI trong bản app đã cài.
+
 ## Bổ sung trong 0.1.3
 
 | Phạm vi | Kết quả |
