@@ -8,7 +8,8 @@ Giao diện React + TypeScript dùng chung; Windows chạy bằng Tauri/Rust, An
 
 ## Chức năng
 
-- Thư mục trên máy/USB, thư mục con; link ảnh, danh sách JSON và WebDAV/NAS.
+- Nhiều thư mục trong cùng một nguồn local, Google Drive hoặc WebDAV/NAS; thêm/bỏ từng thư mục bất cứ lúc nào. Link ảnh và danh sách JSON.
+- Nâng ảnh lên 4K: Nhanh trên Windows/Android/TV, AI xử lý local trên Windows. Xem trước–sau, giữ ảnh gốc, lưu riêng thành nguồn “Ảnh 4K”. [Cách dùng](docs/upscaling.md).
 - Gửi / nhận ảnh điện thoại ↔ TV/PC qua QR/link trên cùng Wi-Fi, không cần key. [Cách chuyển ảnh](docs/local-transfer.md).
 - Google Drive công khai bằng API key; Drive riêng qua OAuth trên Windows hoặc relay HTTPS trên Android/TV.
 - Windows: lưu tài khoản Drive trước, chọn/đổi thư mục trên nguồn đã lưu; Lưu & áp dụng đổi ảnh ngay và bật tự đổi. Ghi nhớ tài khoản, thư mục và tùy chọn khởi động cùng Windows.

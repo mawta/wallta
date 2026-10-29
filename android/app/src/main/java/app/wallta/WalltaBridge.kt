@@ -17,6 +17,7 @@ class WalltaBridge(private val activity: MainActivity, private val web: WebView)
     private val store = StateStore(activity.applicationContext)
     private val lan = LanTransfer(activity.applicationContext, store)
     private val updater = AndroidUpdater(activity, store)
+    private val upscale = UpscaleManager(AndroidUpscaleEnvironment(activity.applicationContext, store, updater)).also { TrustedWebView.registerUpscale(it) }
     private val authorizationIds = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
     @Volatile private var closed = false
     fun receive(message: String) {
@@ -25,7 +26,7 @@ class WalltaBridge(private val activity: MainActivity, private val web: WebView)
         val id = request.optString("id"); if (id.length !in 1..128) return
         val command = request.optString("command"); val args = request.optJSONObject("args") ?: JSONObject()
         if (command == "pick_folder") { activity.runOnUiThread { activity.pickFolder { uri, error -> reply(id, error == null, error ?: uri) } }; return }
-        val executor = if (command in listOf("get_state", "save_state", "set_running", "get_capabilities", "google_cancel", "lan_start", "lan_status", "lan_stop", "lan_accept", "update_status", "update_check", "update_download", "update_cancel", "update_install")) control else io
+        val executor = if (command in listOf("get_state", "save_state", "set_running", "get_capabilities", "google_cancel", "lan_start", "lan_status", "lan_stop", "lan_accept", "update_status", "update_check", "update_download", "update_cancel", "update_install", "upscale_start", "upscale_status", "upscale_cancel")) control else io
         executor.execute {
             try {
                 val repo = MediaRepository(activity.applicationContext, store)
@@ -42,6 +43,10 @@ class WalltaBridge(private val activity: MainActivity, private val web: WebView)
                     "update_download" -> updater.download()
                     "update_cancel" -> updater.cancel()
                     "update_install" -> updater.install()
+                    "upscale_start" -> updater.mutate { val ids = args.getJSONArray("ids"); upscale.start((0 until ids.length()).map { ids.getString(it) }, args.getString("mode")) }
+                    "upscale_status" -> upscale.status()
+                    "upscale_cancel" -> upscale.cancel(args.optString("jobId").takeIf { it.isNotBlank() })
+                    "upscale_save" -> upscale.save(args.getString("jobId"))
                     "lan_start" -> lan.start(args.getJSONArray("mediaIds"))
                     "lan_status" -> lan.status()
                     "lan_stop" -> lan.stop()
@@ -74,5 +79,5 @@ class WalltaBridge(private val activity: MainActivity, private val web: WebView)
         activity.runOnUiThread { if (!closed) web.evaluateJavascript("window.__walltaReply&&window.__walltaReply(${JSONObject.quote(id)},$success,$json)", null) }
     }
     fun installerResult(success: Boolean) { updater.installerResult(success) }
-    fun close() { closed = true; updater.close(); lan.close(); authorizationIds.forEach { GoogleAmbient(activity, store).cancel(it) }; runCatching { MediaRepository(activity.applicationContext, store).releaseUnusedGrants() }; io.shutdownNow(); control.shutdownNow() }
+    fun close() { closed = true; TrustedWebView.unregisterUpscale(upscale); upscale.close(); updater.close(); lan.close(); authorizationIds.forEach { GoogleAmbient(activity, store).cancel(it) }; runCatching { MediaRepository(activity.applicationContext, store).releaseUnusedGrants() }; io.shutdownNow(); control.shutdownNow() }
 }

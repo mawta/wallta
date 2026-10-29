@@ -22,7 +22,7 @@ android {
     }
     namespace = "app.wallta"
     compileSdk = 35
-    defaultConfig { applicationId = "app.wallta"; minSdk = 26; targetSdk = 35; versionCode = 5; versionName = "0.1.4" }
+    defaultConfig { applicationId = "app.wallta"; minSdk = 26; targetSdk = 35; versionCode = 6; versionName = "0.1.5" }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     kotlinOptions { jvmTarget = "17" }
     buildTypes { release { isMinifyEnabled = false; if (hasReleaseSigning) signingConfig = signingConfigs.getByName("stableRelease") } }
@@ -42,6 +42,7 @@ dependencies {
     implementation("androidx.core:core:1.15.0")
     implementation("androidx.work:work-runtime-ktx:2.10.1")
     implementation("androidx.documentfile:documentfile:1.0.1")
+    implementation("androidx.exifinterface:exifinterface:1.4.2")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303")

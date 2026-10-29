@@ -1,9 +1,11 @@
 export type SourceKind = 'local' | 'url' | 'manifest' | 'webdav' | 'drive' | 'photos';
+export interface SourceFolder { location: string; name?: string }
 export interface Source {
   id: string;
   name: string;
   kind: SourceKind;
   location: string;
+  folders?: SourceFolder[];
   recursive: boolean;
   enabled: boolean;
   username?: string;

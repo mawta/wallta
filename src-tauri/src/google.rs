@@ -646,7 +646,8 @@ pub(crate) fn cleanup_obsolete_imports(
         before
             .iter()
             .filter(|source| source.kind == "local")
-            .map(|source| std::path::Path::new(&source.location)),
+            .flat_map(|source| source.effective_folders())
+            .map(std::path::Path::new),
         after,
     );
 }
@@ -673,11 +674,13 @@ fn cleanup_import_directories<'a>(
     }
     let mut references = Vec::new();
     for source in sources {
-        match std::path::Path::new(&source.location).canonicalize() {
-            Ok(path) => references.push(path),
-            // An unresolved local alias may still refer to a candidate. Retain data if uncertain.
-            Err(_) if source.kind == "local" => return,
-            Err(_) => (),
+        for location in source.effective_folders() {
+            match std::path::Path::new(location).canonicalize() {
+                Ok(path) => references.push(path),
+                // An unresolved local alias may still refer to a candidate. Retain data if uncertain.
+                Err(_) if source.kind == "local" => return,
+                Err(_) => (),
+            }
         }
     }
     for directory in directories {
@@ -1092,6 +1095,26 @@ mod tests {
         );
         assert!(old.is_dir());
         assert!(arbitrary.is_dir());
+    }
+
+    #[test]
+    fn cleanup_preserves_import_referenced_by_a_secondary_folder() {
+        let root = tempfile::tempdir().unwrap();
+        let imported = root.path().join("google-import").join("old");
+        let other = root.path().join("other");
+        std::fs::create_dir_all(&imported).unwrap();
+        std::fs::create_dir_all(&other).unwrap();
+        let reference: Source = serde_json::from_value(json!({
+            "id":"local","name":"Local","kind":"local","location":other,
+            "folders":[{"location":other},{"location":imported}]
+        }))
+        .unwrap();
+        cleanup_obsolete_imports(
+            root.path(),
+            &[photo_source("photos", &imported)],
+            &[reference],
+        );
+        assert!(imported.is_dir());
     }
     #[cfg(unix)]
     #[test]

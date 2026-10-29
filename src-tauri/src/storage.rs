@@ -87,6 +87,12 @@ pub fn source_fingerprint(source: &Source) -> String {
             .unwrap()
             .push(serde_json::json!(connection));
     }
+    if !source.folders.is_empty() {
+        identity
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!(source.effective_folders()));
+    }
     format!("{:x}", Sha256::digest(identity.to_string().as_bytes()))
 }
 pub fn offline_items(source: &Source, catalog: Option<&Catalog>, cache: &Path) -> Vec<MediaItem> {
@@ -171,6 +177,7 @@ impl Store {
             return Err("Unsupported saved state version.".into());
         }
         for source in &mut state.sources {
+            source.validate_folders()?;
             load_secrets(source)?;
         }
         state.settings.validate()?;
@@ -310,6 +317,36 @@ fn put_secret(_: &str, _: &str, value: Option<&str>) -> Result<(), String> {
 mod google_identity_tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn editing_secondary_folder_invalidates_catalog_and_owned_cache() {
+        let make = |secondary| {
+            serde_json::from_value::<Source>(json!({
+                "id":"drive", "name":"Drive", "kind":"drive", "location":"one",
+                "folders":[{"location":"one"},{"location":secondary}]
+            }))
+            .unwrap()
+        };
+        let old = make("two");
+        let new = make("three");
+        assert_ne!(source_fingerprint(&old), source_fingerprint(&new));
+        let cache = tempfile::tempdir().unwrap();
+        let media = crate::providers::item("https://test/image.jpg".into(), None, &old.id);
+        let path = cache.path().join(format!("{}.img", media.id));
+        fs::write(&path, b"old").unwrap();
+        let mut runtime = RuntimeState::default();
+        runtime.catalogs.insert(
+            old.id.clone(),
+            Catalog {
+                fingerprint: source_fingerprint(&old),
+                items: vec![media.clone()],
+            },
+        );
+        own_cache(&mut runtime, &media, &old);
+        reconcile_catalogs(&mut runtime, &[new], cache.path());
+        assert!(runtime.catalogs.is_empty());
+        assert!(!path.exists());
+    }
 
     fn source(account: Option<&str>, connection_id: Option<&str>) -> Source {
         serde_json::from_value(json!({

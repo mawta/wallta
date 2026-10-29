@@ -139,13 +139,28 @@ fn webdav_folder(mut url: Url) -> Url {
     url.set_fragment(None);
     url
 }
-fn webdav_root(source: &Source) -> Result<Url, String> {
-    let url = network_url(&source.location)?;
-    if (source.password.is_some() || source.username.is_some()) && url.scheme() != "https" {
-        return Err("WebDAV credentials require HTTPS.".into());
+fn webdav_roots(source: &Source) -> Result<Vec<Url>, String> {
+    let mut roots: Vec<Url> = Vec::new();
+    for location in source.effective_folders() {
+        let url = network_url(location)?;
+        if (source.password.is_some() || source.username.is_some()) && url.scheme() != "https" {
+            return Err("WebDAV credentials require HTTPS.".into());
+        }
+        let root = webdav_folder(url);
+        if !within_webdav_root(&root, &root) {
+            return Err("WebDAV folders cannot contain encoded path separators.".into());
+        }
+        if roots
+            .first()
+            .is_some_and(|first| first.origin() != root.origin())
+        {
+            return Err("WebDAV folders in one source must use the same origin.".into());
+        }
+        roots.push(root);
     }
-    Ok(webdav_folder(url))
+    Ok(roots)
 }
+
 fn within_webdav_root(url: &Url, root: &Url) -> bool {
     let path = url.path().to_ascii_lowercase();
     network_url(url.as_str()).is_ok()
@@ -155,13 +170,17 @@ fn within_webdav_root(url: &Url, root: &Url) -> bool {
         // different hierarchy after a WebDAV server decodes it.
         && !path.contains("%2f") && !path.contains("%5c")
 }
-fn webdav_client(root: &Url) -> Result<Client, String> {
-    let root = root.clone();
+fn webdav_client(roots: &[Url]) -> Result<Client, String> {
+    let roots = roots.to_vec();
     Client::builder()
         .connect_timeout(Duration::from_secs(10))
         .timeout(Duration::from_secs(30))
         .redirect(reqwest::redirect::Policy::custom(move |attempt| {
-            if attempt.previous().len() >= 5 || !within_webdav_root(attempt.url(), &root) {
+            if attempt.previous().len() >= 5
+                || !roots
+                    .iter()
+                    .any(|root| within_webdav_root(attempt.url(), root))
+            {
                 return attempt.error("WebDAV redirects must stay inside the configured folder");
             }
             attempt.follow()
@@ -271,13 +290,18 @@ fn walk_webdav(
     mut fetch: impl FnMut(&Url, Duration) -> Result<String, String>,
 ) -> Result<Vec<MediaItem>, String> {
     use std::{collections::VecDeque, time::Instant};
-    let root = webdav_root(source)?;
+    let roots = webdav_roots(source)?;
     let deadline = Instant::now() + Duration::from_secs(60);
-    let mut pending = VecDeque::from([(root.clone(), 0usize)]);
-    let mut visited = HashSet::from([root.as_str().to_owned()]);
+    let mut visited = HashSet::new();
+    let mut pending = VecDeque::new();
+    for root in roots {
+        if visited.insert(root.as_str().to_owned()) {
+            pending.push_back((root.clone(), root, 0usize));
+        }
+    }
     let mut image_ids = HashSet::new();
     let mut result = Vec::new();
-    while let Some((folder, depth)) = pending.pop_front() {
+    while let Some((folder, root, depth)) = pending.pop_front() {
         let remaining = deadline
             .checked_duration_since(Instant::now())
             .filter(|time| !time.is_zero())
@@ -305,20 +329,20 @@ fn walk_webdav(
                 return Err("WebDAV recursion is limited to 16 levels and 1000 folders. Choose a smaller folder.".into());
             }
             visited.insert(child.as_str().to_owned());
-            pending.push_back((child, depth + 1));
+            pending.push_back((child, root.clone(), depth + 1));
         }
     }
     Ok(result)
 }
 fn list_webdav(source: &Source) -> Result<Vec<MediaItem>, String> {
-    let client = webdav_client(&webdav_root(source)?)?;
+    let client = webdav_client(&webdav_roots(source)?)?;
     walk_webdav(source, |folder, timeout| {
         let request = client.request(reqwest::Method::from_bytes(b"PROPFIND").unwrap(), folder.clone())
             .timeout(timeout)
             .header("Depth", "1")
             .header("Content-Type", "application/xml")
             .body("<?xml version=\"1.0\"?><d:propfind xmlns:d=\"DAV:\"><d:prop><d:resourcetype/><d:getcontenttype/></d:prop></d:propfind>");
-        // All queued URLs and redirect targets are constrained to this HTTPS root.
+        // All queued URLs and redirect targets stay within explicitly selected roots.
         let request = if let Some(user) = &source.username {
             request.basic_auth(user, source.password.as_ref())
         } else {
@@ -335,10 +359,30 @@ fn list_webdav(source: &Source) -> Result<Vec<MediaItem>, String> {
 }
 
 fn local_list(source: &Source) -> Result<Vec<MediaItem>, String> {
-    fn scan(path: &Path, source: &Source, result: &mut Vec<MediaItem>) -> Result<(), String> {
-        for entry in fs::read_dir(path).map_err(|_| {
+    use std::{collections::VecDeque, time::Instant};
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let mut pending = VecDeque::new();
+    let mut visited = HashSet::new();
+    for location in source.effective_folders() {
+        let path = Path::new(location);
+        let canonical = path.canonicalize().map_err(|_| {
+            "Cannot read the local folder. Pick it again or check permissions.".to_string()
+        })?;
+        if visited.insert(canonical) {
+            pending.push_back((path.to_path_buf(), 0usize));
+        }
+    }
+    let mut result = vec![];
+    let mut files = HashSet::new();
+    let mut entries = 0usize;
+    'scan: while let Some((path, depth)) = pending.pop_front() {
+        for entry in fs::read_dir(&path).map_err(|_| {
             "Cannot read the local folder. Pick it again or check permissions.".to_string()
         })? {
+            entries += 1;
+            if Instant::now() >= deadline || entries > 100_000 {
+                return Err("Local listing exceeded its 60 second / 100000 entry limit. Use smaller folders.".into());
+            }
             let entry = entry.map_err(|_| "Cannot read a folder entry.".to_string())?;
             let kind = entry.file_type().map_err(|e| e.to_string())?;
             // Do not follow symlinks/junctions outside the granted folder.
@@ -346,8 +390,18 @@ fn local_list(source: &Source) -> Result<Vec<MediaItem>, String> {
                 continue;
             }
             if kind.is_dir() && source.recursive {
-                scan(&entry.path(), source, result)?;
-            } else if kind.is_file() && is_image(&entry.path().to_string_lossy()) {
+                let canonical = entry.path().canonicalize().map_err(|e| e.to_string())?;
+                if !visited.contains(&canonical) {
+                    if depth >= 16 || visited.len() >= 1000 {
+                        return Err("Local recursion is limited to 16 levels and 1000 folders. Choose smaller folders.".into());
+                    }
+                    visited.insert(canonical);
+                    pending.push_back((entry.path(), depth + 1));
+                }
+            } else if kind.is_file()
+                && is_image(&entry.path().to_string_lossy())
+                && files.insert(entry.path().canonicalize().map_err(|e| e.to_string())?)
+            {
                 result.push(item(
                     entry.path().to_string_lossy().into_owned(),
                     Some(entry.file_name().to_string_lossy().into_owned()),
@@ -355,19 +409,18 @@ fn local_list(source: &Source) -> Result<Vec<MediaItem>, String> {
                 ));
             }
             if result.len() >= MAX_ITEMS {
-                return Ok(());
+                break 'scan;
             }
         }
-        Ok(())
     }
-    let mut result = vec![];
-    scan(Path::new(&source.location), source, &mut result)?;
     result.sort_by(|a, b| a.url.cmp(&b.url));
     Ok(result)
 }
 
 pub fn list_source(client: &Client, source: &Source) -> Result<Vec<MediaItem>, String> {
-    let resolved = crate::google::authorize_source(source)?;
+    let mut validated = source.clone();
+    validated.validate_folders()?;
+    let resolved = crate::google::authorize_source(&validated)?;
     let source = &resolved;
     match source.kind.as_str() {
         "local" => local_list(source),
@@ -424,7 +477,12 @@ fn list_drive(client: &Client, source: &Source) -> Result<Vec<MediaItem>, String
         return Err("Google Drive needs an API key for a public folder, or an OAuth access token for private files. Configure credentials first.".into());
     }
     let id = drive_folder(&source.location)?;
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
     walk_drive(source, &id, |folder, page| {
+        let remaining = deadline
+            .checked_duration_since(std::time::Instant::now())
+            .filter(|time| !time.is_zero())
+            .ok_or("Drive listing exceeded its 60 second limit. Use smaller folders.")?;
         let filter = if source.recursive {
             "(mimeType contains 'image/' or mimeType = 'application/vnd.google-apps.folder')"
         } else {
@@ -433,6 +491,7 @@ fn list_drive(client: &Client, source: &Source) -> Result<Vec<MediaItem>, String
         let query = format!("'{folder}' in parents and trashed = false and {filter}");
         let mut request = client
             .get("https://www.googleapis.com/drive/v3/files")
+            .timeout(remaining.min(Duration::from_secs(30)))
             .query(&[
                 ("q", query.as_str()),
                 ("pageSize", "1000"),
@@ -458,8 +517,22 @@ pub fn walk_drive(
 ) -> Result<Vec<MediaItem>, String> {
     use std::collections::VecDeque;
     let deadline = std::time::Instant::now() + Duration::from_secs(60);
-    let mut folders = VecDeque::from([(root.to_string(), 0usize)]);
-    let mut visited = HashSet::from([root.to_string()]);
+    let roots = if source.folders.is_empty() {
+        vec![drive_folder(root)?]
+    } else {
+        source
+            .effective_folders()
+            .into_iter()
+            .map(drive_folder)
+            .collect::<Result<Vec<_>, _>>()?
+    };
+    let mut visited = HashSet::new();
+    let mut folders = VecDeque::new();
+    for root in roots {
+        if visited.insert(root.clone()) {
+            folders.push_back((root, 0usize));
+        }
+    }
     let mut file_ids = HashSet::new();
     let mut result = Vec::new();
     let mut pages = 0;
@@ -475,6 +548,12 @@ pub fn walk_drive(
             }
             pages += 1;
             let page = fetch(&folder, &token)?;
+            if std::time::Instant::now() >= deadline {
+                return Err(
+                    "Drive listing exceeded its 60 second / 100 page limit. Use a smaller folder."
+                        .into(),
+                );
+            }
             let files = page
                 .get("files")
                 .and_then(Value::as_array)
@@ -593,18 +672,20 @@ fn list_photos(client: &Client, source: &Source) -> Result<Vec<MediaItem>, Strin
 }
 
 pub fn download(client: &Client, media: &MediaItem, source: &Source) -> Result<Vec<u8>, String> {
-    let resolved = crate::google::authorize_source(source)?;
+    let mut validated = source.clone();
+    validated.validate_folders()?;
+    let resolved = crate::google::authorize_source(&validated)?;
     let source = &resolved;
     let url = network_url(&media.url)?;
     // A dedicated redirect policy also prevents same-origin redirects from
     // forwarding WebDAV credentials outside the granted root path.
     let scoped_client;
     let client = if source.kind == "webdav" {
-        let root = webdav_root(source)?;
-        if !within_webdav_root(&url, &root) {
+        let roots = webdav_roots(source)?;
+        if !roots.iter().any(|root| within_webdav_root(&url, root)) {
             return Err("The WebDAV image is outside the configured folder.".into());
         }
-        scoped_client = webdav_client(&root)?;
+        scoped_client = webdav_client(&roots)?;
         &scoped_client
     } else {
         client
@@ -647,6 +728,194 @@ mod webdav_tests {
     }
     fn page(entries: String) -> String {
         format!(r#"<d:multistatus xmlns:d="DAV:">{entries}</d:multistatus>"#)
+    }
+
+    #[test]
+    fn selected_webdav_roots_are_both_visited_and_overlap_is_deduplicated() {
+        let source: Source = serde_json::from_value(serde_json::json!({
+            "id":"dav","name":"DAV","kind":"webdav","location":"https://dav.test/photos/",
+            "recursive":true,"folders":[{"location":"https://dav.test/photos/"},
+                {"location":"https://dav.test/photos/child/"},{"location":"https://dav.test/other/"}]
+        })).unwrap();
+        let mut visits = vec![];
+        let images = walk_webdav(&source, |folder, _| {
+            visits.push(folder.path().to_owned());
+            Ok(page(match folder.path() {
+                "/photos/" => collection("child/") + &image("child/shared.jpg"),
+                "/photos/child/" => image("shared.jpg"),
+                "/other/" => image("second.jpg"),
+                _ => panic!("Unselected folder"),
+            }))
+        })
+        .unwrap();
+        assert_eq!(visits.len(), 3);
+        assert!(visits.contains(&"/other/".into()));
+        assert_eq!(images.len(), 2);
+    }
+
+    #[test]
+    fn two_local_roots_and_nested_overlap_return_each_file_once() {
+        let root = tempfile::tempdir().unwrap();
+        let first = root.path().join("one");
+        let nested = first.join("nested");
+        let second = root.path().join("two");
+        fs::create_dir_all(&nested).unwrap();
+        fs::create_dir_all(&second).unwrap();
+        fs::write(first.join("first.jpg"), b"a").unwrap();
+        fs::write(nested.join("nested.jpg"), b"b").unwrap();
+        fs::write(second.join("second.jpg"), b"c").unwrap();
+        let source: Source = serde_json::from_value(serde_json::json!({
+            "id":"local","name":"Local","kind":"local","location":first,"recursive":true,
+            "folders":[{"location":first},{"location":nested},{"location":second}]
+        }))
+        .unwrap();
+        let items = local_list(&source).unwrap();
+        assert_eq!(items.len(), 3);
+        assert_eq!(
+            items
+                .iter()
+                .map(|item| &item.id)
+                .collect::<HashSet<_>>()
+                .len(),
+            3
+        );
+    }
+
+    #[test]
+    fn multiple_drive_roots_share_pagination_budget_and_deduplicate_files() {
+        let source: Source = serde_json::from_value(serde_json::json!({
+            "id":"drive","name":"Drive","kind":"drive","location":"first",
+            "folders":[{"location":"first"},{"location":"second"}]
+        }))
+        .unwrap();
+        let mut visits = vec![];
+        let images = walk_drive(&source, "first", |folder, _| {
+            visits.push(folder.to_owned());
+            Ok(serde_json::json!({"files":[{"id":"shared","name":"same.jpg","mimeType":"image/jpeg"},
+                {"id":format!("image-{folder}"),"name":"own.jpg","mimeType":"image/jpeg"}]}))
+        }).unwrap();
+        assert_eq!(visits, vec!["first", "second"]);
+        assert_eq!(images.len(), 3);
+        let mut count = 0;
+        let error = walk_drive(&source, "first", |folder, _| {
+            count += 1;
+            Ok(if folder == "first" && count == 50 {
+                serde_json::json!({"files":[]})
+            } else {
+                serde_json::json!({"files":[],"nextPageToken":format!("{folder}-{count}")})
+            })
+        })
+        .unwrap_err();
+        assert!(error.contains("100 page"));
+        assert_eq!(count, 100);
+    }
+
+    #[test]
+    fn local_scan_rejects_unbounded_depth() {
+        let root = tempfile::tempdir().unwrap();
+        let mut directory = root.path().to_path_buf();
+        for _ in 0..17 {
+            directory.push("a");
+        }
+        fs::create_dir_all(directory).unwrap();
+        let source: Source = serde_json::from_value(serde_json::json!({
+            "id":"local","name":"Local","kind":"local","location":root.path(),"recursive":true
+        }))
+        .unwrap();
+        assert!(local_list(&source).unwrap_err().contains("16 levels"));
+    }
+
+    #[test]
+    fn secondary_webdav_root_with_http_credentials_is_rejected_before_fetch() {
+        let source: Source = serde_json::from_value(serde_json::json!({
+            "id":"dav","name":"DAV","kind":"webdav","location":"https://dav.test/photos/","username":"user",
+            "folders":[{"location":"https://dav.test/photos/"},{"location":"http://dav.test/other/"}]
+        })).unwrap();
+        assert!(
+            walk_webdav(&source, |_, _| panic!("Do not send credentials"))
+                .unwrap_err()
+                .contains("HTTPS")
+        );
+    }
+
+    #[test]
+    fn webdav_roots_reject_other_account_origin_before_fetch() {
+        let source: Source = serde_json::from_value(serde_json::json!({
+            "id":"dav","name":"DAV","kind":"webdav","location":"https://dav.test/one/",
+            "folders":[{"location":"https://dav.test/one/"},{"location":"https://other.test/two/"}]
+        }))
+        .unwrap();
+        let error = walk_webdav(&source, |_, _| {
+            panic!("Do not request an unrelated account origin")
+        })
+        .unwrap_err();
+        assert!(error.contains("same origin"));
+    }
+
+    #[test]
+    fn selected_webdav_roots_share_a_global_folder_budget() {
+        let source: Source = serde_json::from_value(serde_json::json!({
+            "id":"dav","name":"DAV","kind":"webdav","location":"https://dav.test/one/","recursive":true,
+            "folders":[{"location":"https://dav.test/one/"},{"location":"https://dav.test/two/"}]
+        })).unwrap();
+        let mut count = 0;
+        let error = walk_webdav(&source, |_, _| {
+            count += 1;
+            Ok(page(
+                (0..600)
+                    .map(|id| collection(&format!("child{id}/")))
+                    .collect(),
+            ))
+        })
+        .unwrap_err();
+        assert!(error.contains("1000 folders"));
+        assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn download_refuses_images_outside_all_selected_webdav_roots_before_network() {
+        let source: Source = serde_json::from_value(serde_json::json!({
+            "id":"dav","name":"DAV","kind":"webdav","location":"https://dav.test/one/","username":"user","password":"secret",
+            "folders":[{"location":"https://dav.test/one/"},{"location":"https://dav.test/two/"}]
+        })).unwrap();
+        let client = client().unwrap();
+        for url in [
+            "https://dav.test/private/a.jpg",
+            "https://dav.test/two-other/a.jpg",
+            "https://other.test/two/a.jpg",
+            "https://dav.test/two/%2f..%2fprivate.jpg",
+        ] {
+            let error =
+                download(&client, &item(url.into(), None, &source.id), &source).unwrap_err();
+            assert!(error.contains("outside the configured folder"), "{error}");
+        }
+    }
+
+    #[test]
+    fn webdav_redirect_cannot_escape_the_selected_roots() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut request = [0; 4096];
+            stream.read(&mut request).unwrap();
+            stream.write_all(b"HTTP/1.1 302 Found\r\nLocation: /private/a.jpg\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
+        });
+        let roots = [
+            Url::parse(&format!("http://{address}/one/")).unwrap(),
+            Url::parse(&format!("http://{address}/two/")).unwrap(),
+        ];
+        let error = webdav_client(&roots)
+            .unwrap()
+            .get(roots[1].join("a.jpg").unwrap())
+            .send()
+            .unwrap_err();
+        server.join().unwrap();
+        assert!(error.is_redirect());
     }
 
     #[test]

@@ -6,7 +6,7 @@ import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 
 export const repository = 'mawta/wallta';
-export const releaseNotes = 'Hiện tài khoản Google đã kết nối trong Cài đặt và khi thêm nguồn Drive/Photos. Mở lại kết nối đã lưu mà không phải đăng nhập lại. Drive cho phép Lưu kết nối trước, chọn hoặc đổi thư mục bất cứ lúc nào; không tự mở trình chọn thư mục sau đăng nhập.';
+export const releaseNotes = 'Chọn nhiều thư mục trong cùng một nguồn local, Google Drive hoặc WebDAV; ghi nhớ kết nối và danh sách để sửa bất cứ lúc nào. Nâng ảnh 4K: Nhanh trên Windows/Android/TV, AI xử lý local trên Windows. Xem trước–sau, giữ nguyên ảnh gốc và lưu riêng thành nguồn Ảnh 4K. AI cần GPU/driver Vulkan; lần đầu tải bộ xử lý đã xác minh checksum.';
 const readJson = async path => JSON.parse(await readFile(path,'utf8'));
 const sha256 = data => createHash('sha256').update(data).digest('hex');
 const requireValue = (value,message) => { if (!value) throw new Error(message); return value; };

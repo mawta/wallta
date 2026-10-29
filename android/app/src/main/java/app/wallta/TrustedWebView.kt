@@ -14,8 +14,13 @@ import java.io.File
 
 object TrustedWebView {
     const val origin = "https://appassets.androidplatform.net"
+    @Volatile private var upscale: UpscaleManager? = null
+    fun registerUpscale(manager: UpscaleManager) { upscale = manager }
+    fun unregisterUpscale(manager: UpscaleManager) { if (upscale === manager) upscale = null }
     fun create(context: Context): WebView {
-        val loader = WebViewAssetLoader.Builder().addPathHandler("/media/", object : WebViewAssetLoader.PathHandler {
+        val loader = WebViewAssetLoader.Builder().addPathHandler("/upscale/", object : WebViewAssetLoader.PathHandler {
+            override fun handle(path: String): WebResourceResponse = upscale?.preview(path)?.let { file -> runCatching { WebResourceResponse("image/jpeg", null, file.inputStream()) }.getOrNull() } ?: denied()
+        }).addPathHandler("/media/", object : WebViewAssetLoader.PathHandler {
             override fun handle(path: String): WebResourceResponse {
                 if (!path.matches(Regex("[a-f0-9]{64}\\.img"))) return denied()
                 // Original images can be 120 MP. Never expose those to WebView's decoder.
