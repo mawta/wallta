@@ -2,6 +2,17 @@
 
 Đối chiếu mã nguồn và bằng chứng thực thi; CI build không thay thế kiểm tra trên thiết bị. Windows chưa ký Authenticode; APK từ 0.1.2 dùng khóa phát hành cố định.
 
+## Bổ sung trong 0.1.3
+
+| Phạm vi | Kết quả |
+|---|---|
+| React/TypeScript | 43 tests và production build đạt; lưu tài khoản Drive trước/chọn thư mục sau, bỏ phản hồi cũ, polling không bị reset, áp dụng đúng nguồn và giữ nguồn nếu áp dụng lỗi |
+| Windows | 78 Rust tests và NSIS build đạt; metadata/cache theo tài khoản và lần cấp quyền, duyệt Drive, lưu nguồn chưa chọn thư mục, dọn import Photos theo tham chiếu và trạng thái phiên |
+| Android | 77 tests trên Linux đạt, không bỏ qua; build APK đạt, áp dụng theo source ID |
+| Phát hành | 12 tests công cụ đạt; phiên bản 0.1.3, Android versionCode 4; kiểm tra tài liệu nội bộ/credential không được theo dõi trong Git đạt |
+
+[Windows CI](https://github.com/mawta/wallta/actions/runs/40818152582) · [Android CI](https://github.com/mawta/wallta/actions/runs/40818152579) · [Thay đổi](https://github.com/mawta/wallta/pull/1). Chưa thử OAuth bằng credential Google thật, thay wallpaper hoặc khởi động lại trên thiết bị thật. Windows Photos lưu bộ ảnh đã nhập, không tự theo dõi album; Drive ghi nhớ thư mục và đọc lại danh sách ảnh khi chạy.
+
 ## Bổ sung trong 0.1.2
 
 | Phạm vi | Kết quả |
@@ -11,7 +22,7 @@
 | Android | 76 tests trên Linux đạt, không bỏ qua; API 26/28 kiểm tra APK identity/signer, FileProvider, quyền cài, hủy và handoff; APK ký phát hành đạt |
 | Phát hành | 12 tests công cụ đạt; tải lại năm asset công khai, xác minh checksum/chữ ký, manifest latest không cần đăng nhập |
 
-[Commit, CI và checksum 0.1.2](artifacts.md). Chưa chạy nâng cấp thực trên Windows/điện thoại/TV; cần kiểm tra quyền cài, hủy trình cài, giữ dữ liệu và khởi động lại trên thiết bị.
+[Commit, CI và checksum 0.1.2](artifacts-0.1.2.md). Chưa chạy nâng cấp thực trên Windows/điện thoại/TV; cần kiểm tra quyền cài, hủy trình cài, giữ dữ liệu và khởi động lại trên thiết bị.
 
 ## Bổ sung trong 0.1.1
 
@@ -22,7 +33,7 @@
 | Android | 39 JVM tests đạt; TCP thật, giới hạn/hủy/xác nhận, container PNG/JPEG/WebP và native pixel decoding trên Robolectric SDK 26/28; APK build đạt |
 | Trình duyệt LAN | Trang thật chạy bằng Java host trên loopback; gửi ảnh và tải ngược thành công, SHA-256 khớp bản gốc; đã lưu ảnh chụp trang và hướng dẫn Google |
 
-[Commit, CI và checksum 0.1.1](artifacts.md). Các ca LAN qua Wi-Fi/firewall trên cặp thiết bị thật và đăng nhập Google bằng credential thật chưa được thực hiện.
+[Commit, CI và checksum 0.1.1](artifacts-0.1.1.md). Các ca LAN qua Wi-Fi/firewall trên cặp thiết bị thật và đăng nhập Google bằng credential thật chưa được thực hiện.
 
 ## Bằng chứng nền từ bản 0.1.0
 
