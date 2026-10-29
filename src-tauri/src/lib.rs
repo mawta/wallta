@@ -8,6 +8,8 @@ pub mod rotation;
 pub mod storage;
 mod update_policy;
 mod updates;
+mod upscale;
+mod upscale_commands;
 pub mod wallpaper;
 
 use std::sync::Arc;
@@ -40,6 +42,7 @@ pub fn run() {
             .map_err(std::io::Error::other)?;
             let engine = Arc::new(commands::Engine::new(store).map_err(std::io::Error::other)?);
             app.manage(engine.clone());
+            app.manage(Arc::new(upscale::UpscaleManager::new(engine.clone())));
             app.manage(Arc::new(updates::UpdateManager::new(
                 engine.store.root.clone(),
             )));
@@ -64,6 +67,7 @@ pub fn run() {
                         }
                     }
                     "quit" => {
+                        let _ = app.state::<Arc<upscale::UpscaleManager>>().cancel(None);
                         app.state::<Arc<lan::LanManager>>().stop();
                         app.exit(0);
                     }
@@ -121,6 +125,10 @@ pub fn run() {
             commands::get_capabilities,
             commands::clear_cache,
             commands::open_external,
+            upscale_commands::upscale_start,
+            upscale_commands::upscale_status,
+            upscale_commands::upscale_cancel,
+            upscale_commands::upscale_save,
             lan_commands::lan_start,
             lan_commands::lan_status,
             lan_commands::lan_stop,
@@ -144,6 +152,7 @@ pub fn run() {
                 event,
                 tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. }
             ) {
+                let _ = app.state::<Arc<upscale::UpscaleManager>>().cancel(None);
                 app.state::<Arc<lan::LanManager>>().stop();
             }
         });

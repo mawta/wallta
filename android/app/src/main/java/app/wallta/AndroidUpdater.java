@@ -43,6 +43,13 @@ final class AndroidUpdater implements UpdateManager.Environment, AutoCloseable {
     JSONObject download() { return manager.download(); }
     JSONObject cancel() { return manager.cancel(); }
     JSONObject install() { return manager.install(); }
+    /** The same monitor serializes publication with the final installer handoff. */
+    <T> T mutate(java.util.concurrent.Callable<T> action) throws Exception {
+        synchronized (manager) {
+            if ("installing".equals(manager.status().optString("phase"))) throw new IllegalStateException("Wait until the update installer finishes.");
+            return action.call();
+        }
+    }
     void installerResult(boolean success) { manager.installerResult(success); }
     public String currentVersion() { return installed.versionName; }
     public long currentCode() { return versionCode(installed); }

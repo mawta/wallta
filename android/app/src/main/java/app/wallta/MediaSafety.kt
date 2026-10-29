@@ -7,7 +7,7 @@ object MediaSafety {
     fun forSource(items: List<Media>, sourceId: String?): List<Media> = if (sourceId == null) items else items.filter { it.sourceId == sourceId }
     /** Call after omitted secrets have been merged with their saved values. */
     fun sourceConfig(source: org.json.JSONObject): String = org.json.JSONArray().put(source.optString("kind")).put(source.optString("location"))
-        .put(source.optBoolean("recursive")).put(source.optBoolean("enabled", true)).put(source.optString("username")).put(source.optString("password"))
+        .put(SourceFolders.fingerprint(source)).put(source.optBoolean("recursive")).put(source.optBoolean("enabled", true)).put(source.optString("username")).put(source.optString("password"))
         .put(source.optString("apiKey")).put(source.optString("accessToken")).toString()
     fun visualSize(width: Int, height: Int): Pair<Int, Int> {
         require(width > 0 && height > 0)

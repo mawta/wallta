@@ -60,8 +60,7 @@ class MediaRepository(private val context: Context, private val store: StateStor
             if (source != null) {
                 val saved = store.state().getJSONArray("sources")
                 val current = (0 until saved.length()).map { saved.getJSONObject(it) }.find { it.optString("id") == source.getString("id") }
-                val fields = listOf("id", "name", "kind", "location", "recursive", "enabled", "username", "password", "apiKey", "accessToken")
-                check(current != null && fields.all { current.opt(it) == source.opt(it) }) { "Catalog source was removed or edited" }
+                check(current != null && MediaSafety.sourceConfig(current) == MediaSafety.sourceConfig(source)) { "Catalog source was removed or edited" }
             }
         }
         val result = mutableListOf<Media>(); val errors = mutableListOf<String>()
@@ -112,24 +111,29 @@ class MediaRepository(private val context: Context, private val store: StateStor
             require(saved.optString("location") == s.getString("location")); val a = saved.optJSONArray("items") ?: JSONArray()
             return (0 until a.length()).mapNotNull { i -> val entry = a.getJSONObject(i); val name = entry.getString("file"); if (!name.matches(Regex("[a-f0-9]{64}\\.img")) || !File(folder, name).isFile) null else Media(Policy.hash("${s.getString("id")}:${s.getString("location")}:$name"), entry.optString("name", "Photo"), "${s.getString("location")}/$name", s.getString("id")) }
         }
-        val root = DocumentFile.fromTreeUri(context, Uri.parse(s.getString("location"))) ?: error("Choose the folder again")
-        check(root.exists() && root.isDirectory && root.canRead()) { "Local or USB folder is unavailable. Reconnect storage or choose the folder again." }
-        val items = mutableListOf<Media>(); var visited = 0
+        val items = mutableListOf<Media>(); val folders = mutableSetOf<String>(); var visited = 0; var entries = 0
+        val deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(60)
         fun scan(folder: DocumentFile, depth: Int) {
-            if (depth > 16 || visited++ >= 1000 || Thread.currentThread().isInterrupted) return
+            if (depth > 16 || visited >= 1000 || entries >= 100000 || System.nanoTime() >= deadline || Thread.currentThread().isInterrupted || !folders.add(SourceFolders.documentKey(folder.uri.toString()))) return
+            visited++
             for (f in folder.listFiles()) {
-                if (items.size >= 10000) return
+                if (items.size >= 10000 || entries++ >= 100000 || System.nanoTime() >= deadline || Thread.currentThread().isInterrupted) return
                 if (f.isDirectory && s.optBoolean("recursive")) scan(f, depth + 1)
-                else if (f.isFile && f.type?.startsWith("image/") == true) items += Media(Policy.hash("${s.getString("id")}:${f.uri}"), f.name ?: "Image", f.uri.toString(), s.getString("id"))
+                else if (f.isFile && f.type?.startsWith("image/") == true) items += Media(Policy.hash("${s.getString("id")}:${SourceFolders.documentKey(f.uri.toString())}"), f.name ?: "Image", f.uri.toString(), s.getString("id"))
             }
         }
-        scan(root, 0); return items
+        SourceFolders.locations(s).forEach { location ->
+            val root = DocumentFile.fromTreeUri(context, Uri.parse(location)) ?: error("Choose the folder again")
+            check(root.exists() && root.isDirectory && root.canRead()) { "Local or USB folder is unavailable. Reconnect storage or choose the folder again." }
+            scan(root, 0)
+        }
+        return items.distinctBy { it.id }
     }
     fun headers(media: Media): Map<String, String> {
         val sources = store.state().getJSONArray("sources")
         val source = (0 until sources.length()).map { sources.getJSONObject(it) }.find { it.optString("id") == media.sourceId } ?: error("Source removed")
         return when (source.getString("kind")) {
-            "webdav" -> { require(MediaSafety.within(media.url, source.getString("location"))) { "Image is outside the active WebDAV origin/folder" }; mapOf("Authorization" to "Basic " + Base64.encodeToString("${source.optString("username")}:${source.optString("password")}".toByteArray(), Base64.NO_WRAP)) }
+            "webdav" -> { require(SourceFolders.contains(source, media.url)) { "Image is outside the active WebDAV origin/folder" }; mapOf("Authorization" to "Basic " + Base64.encodeToString("${source.optString("username")}:${source.optString("password")}".toByteArray(), Base64.NO_WRAP)) }
             "drive" -> {
                 val relay = DriveRelay(store).session(media.sourceId)?.takeIf { it.optString("phase") == "ready" }
                 val base = if (relay != null) "${relay.getString("relayUrl")}/api/drive/media/" else "https://www.googleapis.com/drive/v3/files/"
@@ -141,16 +145,18 @@ class MediaRepository(private val context: Context, private val store: StateStor
         }
     }
     private fun webdav(s: JSONObject): List<Media> {
-        val source = s.getString("id"); val base = s.getString("location"); require(Policy.http(base))
+        val source = s.getString("id"); val roots = SourceFolders.locations(s); roots.forEach { require(Policy.http(it)) }
         val auth = "Basic " + Base64.encodeToString("${s.optString("username")}:${s.optString("password")}".toByteArray(), Base64.NO_WRAP)
-        require(base.startsWith("https://") || (s.optString("username").isEmpty() && s.optString("password").isEmpty())) { "WebDAV credentials require HTTPS" }
-        val seen = mutableSetOf<String>(); val items = mutableListOf<Media>(); val origin = URI(base)
+        require(roots.all { it.startsWith("https://") } || (s.optString("username").isEmpty() && s.optString("password").isEmpty())) { "WebDAV credentials require HTTPS" }
+        val seen = mutableSetOf<String>(); val items = linkedMapOf<String, Media>()
+        val deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(60)
         fun scan(url: String, depth: Int) {
-            if (depth > 16 || seen.size >= 1000 || !seen.add(url)) return
+            if (depth > 16 || seen.size >= 1000 || items.size >= 10000 || System.nanoTime() >= deadline || Thread.currentThread().isInterrupted || !SourceFolders.contains(s, url) || !seen.add(url.trimEnd('/'))) return
             val xml = String(Net.bytes(url, 4 * 1024 * 1024, mapOf("Authorization" to auth, "Depth" to "1"), "PROPFIND", """<?xml version="1.0"?><d:propfind xmlns:d="DAV:"><d:prop><d:resourcetype/><d:getcontenttype/><d:displayname/></d:prop></d:propfind>""", "application/xml"))
             val parser = Xml.newPullParser().apply { setFeature(XmlPullParser.FEATURE_PROCESS_NAMESPACES, true); setInput(StringReader(xml)) }
             var href = ""; var mime = ""; var name = ""; var folder = false
             while (parser.eventType != XmlPullParser.END_DOCUMENT) {
+                if (System.nanoTime() >= deadline || Thread.currentThread().isInterrupted) return
                 if (parser.eventType == XmlPullParser.START_TAG) when (parser.name) {
                     "response" -> { href = ""; mime = ""; name = ""; folder = false }
                     "href" -> href = parser.nextText()
@@ -160,42 +166,45 @@ class MediaRepository(private val context: Context, private val store: StateStor
                 }
                 if (parser.eventType == XmlPullParser.END_TAG && parser.name == "response" && href.isNotEmpty()) {
                     val resolved = URI(url).resolve(href)
-                    if (resolved.scheme == origin.scheme && resolved.host == origin.host && resolved.port == origin.port && resolved.userInfo == null) {
+                    if (SourceFolders.contains(s, resolved.toString())) {
                         val target = resolved.toString()
                         if (folder && s.optBoolean("recursive") && target.trimEnd('/') != url.trimEnd('/')) scan(target, depth + 1)
-                        else if (!folder && (mime.startsWith("image/") || resolved.path.matches(Regex("(?i).*\\.(jpg|jpeg|png|webp|gif|bmp|heic)$"))) && items.size < 10000) items += Media(Policy.hash("$source:$target"), name.ifBlank { resolved.path.substringAfterLast('/') }, target, source)
+                        else if (!folder && (mime.startsWith("image/") || resolved.path.matches(Regex("(?i).*\\.(jpg|jpeg|png|webp|gif|bmp|heic)$"))) && items.size < 10000) items[target] = Media(Policy.hash("$source:$target"), name.ifBlank { resolved.path.substringAfterLast('/') }, target, source)
                     }
                 }
                 parser.next()
             }
         }
-        scan(base, 0); return items
+        roots.forEach { scan(it, 0) }; return items.values.toList()
     }
     private fun drive(s: JSONObject): List<Media> {
-        val root = DriveRelay.folder(s.getString("location"))
+        val roots = SourceFolders.locations(s).map { DriveRelay.folder(it) }
         val key = s.optString("apiKey"); val token = s.optString("accessToken")
         val relay = DriveRelay(store).session(s.getString("id"))?.takeIf { it.optString("phase") == "ready" }
         require(relay != null || key.isNotBlank() || token.isNotBlank()) { "Connect a Drive relay, use a public API key, or supply an access token" }
+        SourceFolders.relayScope(s, relay)
         val credential = relay?.getString("token") ?: token
         val headers = if (credential.isNotBlank()) mapOf("Authorization" to "Bearer $credential") else emptyMap()
-        val items = mutableListOf<Media>(); val folders = mutableSetOf<String>()
+        val items = linkedMapOf<String, Media>(); val folders = mutableSetOf<String>(); var requests = 0
+        val deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(60)
         fun scan(folder: String, depth: Int) {
-            if (depth > 16 || folders.size >= 1000 || !folders.add(folder)) return
+            if (depth > 16 || folders.size >= 1000 || items.size >= 10000 || requests >= 100 || System.nanoTime() >= deadline || Thread.currentThread().isInterrupted || !folders.add(folder)) return
             var page = ""; var pages = 0
             do {
                 val q = "'$folder' in parents and trashed = false"
                 val listUrl = if (relay != null) "${relay.getString("relayUrl")}/api/drive/files?folderId=${Net.enc(folder)}&pageToken=${Net.enc(page)}" else "https://www.googleapis.com/drive/v3/files?q=${Net.enc(q)}&pageSize=1000&fields=nextPageToken,files(id,name,mimeType)&supportsAllDrives=true&includeItemsFromAllDrives=true&key=${Net.enc(key)}&pageToken=${Net.enc(page)}"
+                if (requests++ >= 100 || System.nanoTime() >= deadline || Thread.currentThread().isInterrupted) return
                 val data = Net.json(listUrl, headers)
                 val files = data.optJSONArray("files") ?: JSONArray()
                 for (i in 0 until files.length()) {
                     val f = files.getJSONObject(i); val mime = f.optString("mimeType")
                     if (mime == "application/vnd.google-apps.folder" && s.optBoolean("recursive")) scan(f.getString("id"), depth + 1)
-                    else if (mime.startsWith("image/") && items.size < 10000) { val id = f.getString("id"); val url = if (relay != null) "${relay.getString("relayUrl")}/api/drive/media/${Net.enc(id)}" else "https://www.googleapis.com/drive/v3/files/${Net.enc(id)}?alt=media&key=${Net.enc(key)}"; items += Media(Policy.hash("${s.getString("id")}:$id"), f.getString("name"), url, s.getString("id")) }
+                    else if (mime.startsWith("image/") && items.size < 10000) { val id = f.getString("id"); val url = if (relay != null) "${relay.getString("relayUrl")}/api/drive/media/${Net.enc(id)}" else "https://www.googleapis.com/drive/v3/files/${Net.enc(id)}?alt=media&key=${Net.enc(key)}"; items[id] = Media(Policy.hash("${s.getString("id")}:$id"), f.getString("name"), url, s.getString("id")) }
                 }
                 page = data.optString("nextPageToken")
             } while (page.isNotEmpty() && ++pages < 100 && items.size < 10000)
         }
-        scan(root, 0); return items
+        roots.forEach { scan(it, 0) }; return items.values.toList()
     }
     fun cacheFile(id: String): File { require(id.matches(Regex("[a-f0-9]{64}"))); return File(dir, "$id.img") }
     fun visual(media: Media): File {
@@ -220,7 +229,12 @@ class MediaRepository(private val context: Context, private val store: StateStor
             require(name.matches(Regex("[a-f0-9]{64}\\.img")))
             File(PhotoImporter.directory(context, location), name).inputStream().use { Net.bounded(it, 25 * 1024 * 1024) }
         } else if (media.url.startsWith("content://")) context.contentResolver.openInputStream(Uri.parse(media.url))!!.use { Net.bounded(it, 25 * 1024 * 1024) }
-        else { require(networkAllowed(state.getJSONObject("settings"))) { "Network unavailable or Wi-Fi required" }; Net.bytes(media.url, 25 * 1024 * 1024, headers(media)) }
+        else {
+            require(networkAllowed(state.getJSONObject("settings"))) { "Network unavailable or Wi-Fi required" }
+            val source = (0 until sources.length()).map { sources.getJSONObject(it) }.first { it.optString("id") == media.sourceId }
+            val scope: ((String) -> Boolean)? = if (source.optString("kind") == "webdav") ({ url -> SourceFolders.contains(source, url) }) else null
+            Net.bytes(media.url, 25 * 1024 * 1024, headers(media), allowedUrl = scope)
+        }
         val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
         android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
         require(bounds.outWidth > 0 && bounds.outHeight > 0 && bounds.outWidth.toLong() * bounds.outHeight <= 120_000_000) { "Invalid or oversized image" }
@@ -249,7 +263,7 @@ class MediaRepository(private val context: Context, private val store: StateStor
     fun clear() = synchronized(StateStore.lock) { store.invalidateCache(); dir.listFiles()?.forEach { it.delete() }; File(context.cacheDir, "visual").listFiles()?.forEach { it.delete() }; store.put("cacheOwners", null) }
     fun releaseUnusedGrants() {
         val a = store.state().getJSONArray("sources")
-        val used = (0 until a.length()).map { a.getJSONObject(it) }.filter { it.optString("kind") == "local" }.map { it.optString("location") }.toSet()
+        val used = (0 until a.length()).map { a.getJSONObject(it) }.filter { it.optString("kind") == "local" }.flatMap { SourceFolders.locations(it) }.toSet()
         context.contentResolver.persistedUriPermissions.filter { it.uri.toString() !in used }.forEach { runCatching { context.contentResolver.releasePersistableUriPermission(it.uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION) } }
     }
     fun cleanup(old: JSONObject, updated: JSONObject) {
@@ -261,7 +275,11 @@ class MediaRepository(private val context: Context, private val store: StateStor
                 clearSource(id)
                 if (s.optString("location").startsWith("wallta-import://")) PhotoImporter(context, store).remove(id, s.getString("location"))
                 val freshPhotos = next?.optString("kind") == "photos" && store.get("google:$id")?.optString("deviceId") == next.optString("location")
-                val freshDrive = next?.optString("kind") == "drive" && DriveRelay(store).session(id)?.optString("folder") == next.optString("location")
+                val relay = DriveRelay(store).session(id)
+                val retainedDriveConnection = s.optString("kind") == "drive" && next?.optString("kind") == "drive" &&
+                    !next.optBoolean("enabled", true) && next.optString("location").isBlank() && (next.optJSONArray("folders")?.length() ?: 0) == 0 &&
+                    relay?.optString("phase") == "ready" && relay.optString("token").isNotBlank()
+                val freshDrive = next?.optString("kind") == "drive" && (relay?.optString("folder") == next.optString("location") || retainedDriveConnection)
                 if (!freshPhotos && !freshDrive && s.optString("kind") in listOf("photos", "drive")) GoogleAmbient(context, store).disconnect(id)
             }
             if (next != null && !next.optBoolean("enabled", true) && s.optString("kind") == "photos") clearSource(id)

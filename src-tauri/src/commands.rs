@@ -103,6 +103,7 @@ impl Engine {
             name: format!("Wi-Fi · {}", chrono::Local::now().format("%Y-%m-%d %H:%M")),
             kind: "local".into(),
             location: path.to_string_lossy().into_owned(),
+            folders: vec![],
             recursive: false,
             enabled: true,
             username: None,
@@ -116,6 +117,124 @@ impl Engine {
         runtime.state = next;
         runtime.media.clear();
         Ok(storage::public_state(&mut runtime.state))
+    }
+    /// Resolve original content through the current native catalog; callers supply IDs only.
+    pub(crate) fn upscale_input(
+        &self,
+        id: &str,
+    ) -> Result<(MediaItem, Source, Vec<u8>, u64), String> {
+        let (snapshot, revision) = self.operation_snapshot()?;
+        let media = snapshot
+            .media
+            .iter()
+            .find(|media| media.id == id)
+            .or_else(|| {
+                snapshot
+                    .state
+                    .current
+                    .as_ref()
+                    .filter(|media| media.id == id)
+            })
+            .ok_or("Image is no longer in the library. Refresh the library first.")?;
+        let source = snapshot
+            .state
+            .sources
+            .iter()
+            .find(|source| source.id == media.source_id && source.enabled)
+            .ok_or("The image source has been removed or disabled.")?;
+        if source.kind != "local"
+            && snapshot.state.settings.wifi_only
+            && !wallpaper::wifi_connected()
+            && !self.store.cache.join(format!("{}.img", media.id)).is_file()
+        {
+            return Err("Waiting for Wi-Fi before downloading the original image.".into());
+        }
+        let bytes = self.prepare(media, source, &snapshot.state.settings, revision)?;
+        let runtime = self.inner.lock().map_err(|error| error.to_string())?;
+        if !self.source_is_current(&runtime, source, revision) {
+            return Err("Image request cancelled because settings changed.".into());
+        }
+        Ok((media.clone(), source.clone(), bytes, revision))
+    }
+    /// Publish a completed managed job against fresh state, atomically with the revision check.
+    pub(crate) fn accept_upscale_source(
+        &self,
+        path: &std::path::Path,
+        expected_revision: u64,
+    ) -> Result<Source, String> {
+        let mut runtime = self.inner.lock().map_err(|error| error.to_string())?;
+        self.mutation_gate.ensure_open()?;
+        let root = self
+            .store
+            .root
+            .canonicalize()
+            .map_err(|_| "Managed image storage is unavailable.")?;
+        let parent = self
+            .store
+            .root
+            .join("upscaled")
+            .canonicalize()
+            .map_err(|_| "Managed upscale storage is unavailable.")?;
+        let canonical = path
+            .canonicalize()
+            .map_err(|_| "The completed upscale folder is unavailable.")?;
+        if parent.parent() != Some(root.as_path())
+            || canonical.parent() != Some(parent.as_path())
+            || !canonical.is_dir()
+            || !canonical
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| {
+                    !name.is_empty()
+                        && name.len() <= 128
+                        && name
+                            .bytes()
+                            .all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_')
+                })
+        {
+            return Err("Upscale results must be a direct managed job folder.".into());
+        }
+        if let Some(existing) = runtime.state.sources.iter().find(|source| {
+            source.kind == "local"
+                && source.effective_folders().iter().any(|location| {
+                    std::path::Path::new(location)
+                        .canonicalize()
+                        .is_ok_and(|path| path == canonical)
+                })
+        }) {
+            let mut clean = existing.clone();
+            clean.password = None;
+            clean.api_key = None;
+            clean.access_token = None;
+            return Ok(clean);
+        }
+        if self.revision.load(Ordering::SeqCst) != expected_revision {
+            return Err("Upscale results cannot be saved because settings changed. Process the selected images again.".into());
+        }
+        if runtime.state.sources.len() >= 100 {
+            return Err("At most 100 sources are supported. Remove a source before saving processed images.".into());
+        }
+        let source = Source {
+            id: format!("upscale-{:032x}", rand::random::<u128>()),
+            name: "Ảnh 4K".into(),
+            kind: "local".into(),
+            location: canonical.to_string_lossy().into_owned(),
+            folders: vec![],
+            recursive: false,
+            enabled: true,
+            username: None,
+            password: None,
+            api_key: None,
+            access_token: None,
+            google: None,
+        };
+        let mut next = runtime.state.clone();
+        next.sources.push(source.clone());
+        self.store.save(&next)?;
+        self.revision.fetch_add(1, Ordering::SeqCst);
+        runtime.state = next;
+        runtime.media.clear();
+        Ok(source)
     }
     pub fn new(store: Store) -> Result<Self, String> {
         let mut state = match store.load() {
@@ -452,7 +571,16 @@ impl Engine {
         }
         let path = self.store.cache.join(format!("{}.img", media.id));
         if path.exists() {
-            return fs::read(path).map_err(|e| e.to_string());
+            let mut bytes = Vec::new();
+            fs::File::open(path)
+                .map_err(|error| error.to_string())?
+                .take(providers::MAX_IMAGE_BYTES + 1)
+                .read_to_end(&mut bytes)
+                .map_err(|error| error.to_string())?;
+            if bytes.len() as u64 > providers::MAX_IMAGE_BYTES {
+                return Err("Cached original image exceeds 32 MB.".into());
+            }
+            return Ok(bytes);
         }
         let bytes = providers::download(&self.client, media, source)?;
         wallpaper::render(&bytes, settings, (1, 1))?;
@@ -565,6 +693,7 @@ impl Engine {
             {
                 return Err("Unknown source type.".into());
             }
+            source.validate_folders()?;
             crate::google::validate_source_location(source)?;
             if ["url", "manifest", "webdav"].contains(&source.kind.as_str()) {
                 providers::network_url(&source.location)?;
@@ -985,3 +1114,189 @@ mod concurrency_tests {
 #[cfg(test)]
 #[path = "lan_engine_tests.rs"]
 mod lan_engine_tests;
+
+#[cfg(test)]
+mod upscale_engine_tests {
+    use super::*;
+
+    fn fixture() -> (tempfile::TempDir, Engine, MediaItem) {
+        let root = tempfile::tempdir().unwrap();
+        let library = root.path().join("originals");
+        fs::create_dir(&library).unwrap();
+        let image = library.join("photo.png");
+        fs::write(&image, b"original-image-bytes").unwrap();
+        let engine =
+            Engine::new(Store::new(root.path().into(), root.path().join("cache")).unwrap())
+                .unwrap();
+        let source: Source = serde_json::from_value(serde_json::json!({
+            "id":"original", "name":"Original", "kind":"local", "location":library
+        }))
+        .unwrap();
+        let media = providers::item(image.to_string_lossy().into(), None, &source.id);
+        {
+            let mut runtime = engine.inner.lock().unwrap();
+            runtime.state.sources.push(source);
+            runtime.media.push(media.clone());
+        }
+        (root, engine, media)
+    }
+
+    fn result_folder(root: &std::path::Path) -> PathBuf {
+        let result = root.join("upscaled").join("test-job");
+        fs::create_dir_all(&result).unwrap();
+        fs::write(result.join("001.jpg"), b"processed-image-bytes").unwrap();
+        result
+    }
+
+    #[test]
+    fn upscale_resolves_enabled_media_ids_and_reads_original_bytes() {
+        let (_root, engine, media) = fixture();
+        let (resolved, source, bytes, revision) = engine.upscale_input(&media.id).unwrap();
+        assert_eq!(resolved.id, media.id);
+        assert_eq!(source.id, "original");
+        assert_eq!(bytes, b"original-image-bytes");
+        assert_eq!(revision, engine.revision.load(Ordering::SeqCst));
+        assert!(engine.upscale_input(&media.url).is_err());
+        assert!(engine.upscale_input("unknown").is_err());
+        engine.inner.lock().unwrap().state.sources[0].enabled = false;
+        assert!(engine.upscale_input(&media.id).is_err());
+    }
+
+    #[test]
+    fn upscale_can_resolve_current_image_but_respects_installer_gate() {
+        let (_root, engine, media) = fixture();
+        {
+            let mut runtime = engine.inner.lock().unwrap();
+            runtime.media.clear();
+            runtime.state.current = Some(media.clone());
+        }
+        assert!(engine.upscale_input(&media.id).is_ok());
+        let barrier = engine.begin_update_install().unwrap();
+        assert!(engine.upscale_input(&media.id).is_err());
+        drop(barrier);
+    }
+
+    #[test]
+    fn upscale_reads_cached_original_with_the_same_32_mb_limit() {
+        let (_root, engine, media) = fixture();
+        {
+            let mut runtime = engine.inner.lock().unwrap();
+            runtime.state.sources[0].kind = "manifest".into();
+            runtime.state.sources[0].location = "https://images.test/list.json".into();
+        }
+        let cached = engine.store.cache.join(format!("{}.img", media.id));
+        fs::write(&cached, b"cached-original").unwrap();
+        assert_eq!(
+            engine.upscale_input(&media.id).unwrap().2,
+            b"cached-original"
+        );
+        fs::File::create(&cached)
+            .unwrap()
+            .set_len(providers::MAX_IMAGE_BYTES + 1)
+            .unwrap();
+        assert!(engine
+            .upscale_input(&media.id)
+            .unwrap_err()
+            .contains("32 MB"));
+    }
+
+    #[test]
+    fn upscale_save_preserves_fresh_state_and_is_idempotent_after_revision_changes() {
+        let (root, engine, _media) = fixture();
+        let path = result_folder(root.path());
+        {
+            let mut runtime = engine.inner.lock().unwrap();
+            runtime.state.settings.interval_seconds = 4321;
+            runtime.state.running = false;
+        }
+        let revision = engine.revision.load(Ordering::SeqCst);
+        let saved = engine.accept_upscale_source(&path, revision).unwrap();
+        assert_eq!(saved.name, "Ảnh 4K");
+        assert_eq!(saved.kind, "local");
+        assert!(saved.enabled);
+        assert!(saved.folders.is_empty());
+        assert_eq!(PathBuf::from(&saved.location), path.canonicalize().unwrap());
+        assert_eq!(engine.snapshot().unwrap().settings.interval_seconds, 4321);
+        assert!(!engine.snapshot().unwrap().running);
+        assert!(engine.inner.lock().unwrap().media.is_empty());
+        assert_eq!(engine.store.load().unwrap().sources.len(), 2);
+        engine.set_running(true).unwrap();
+        let again = engine.accept_upscale_source(&path, revision).unwrap();
+        assert_eq!(saved.id, again.id);
+        assert_eq!(engine.snapshot().unwrap().sources.len(), 2);
+    }
+
+    #[test]
+    fn upscale_save_rejects_stale_revision_and_paths_outside_managed_job() {
+        let (root, engine, _media) = fixture();
+        let job = result_folder(root.path());
+        let revision = engine.revision.load(Ordering::SeqCst);
+        engine.set_running(false).unwrap();
+        let before = engine.snapshot().unwrap().sources.len();
+        assert!(engine
+            .accept_upscale_source(&job, revision)
+            .unwrap_err()
+            .contains("changed"));
+        let current = engine.revision.load(Ordering::SeqCst);
+        for invalid in [
+            root.path().to_path_buf(),
+            root.path().join("upscaled"),
+            root.path().join("originals"),
+            job.join("001.jpg"),
+        ] {
+            assert!(engine.accept_upscale_source(&invalid, current).is_err());
+        }
+        assert_eq!(engine.snapshot().unwrap().sources.len(), before);
+        let barrier = engine.begin_update_install().unwrap();
+        assert!(engine.accept_upscale_source(&job, current).is_err());
+        drop(barrier);
+    }
+
+    #[test]
+    fn upscale_save_failed_persistence_does_not_publish_source() {
+        let (root, engine, _media) = fixture();
+        let job = result_folder(root.path());
+        fs::create_dir(root.path().join("state.json")).unwrap();
+        let revision = engine.revision.load(Ordering::SeqCst);
+        assert!(engine.accept_upscale_source(&job, revision).is_err());
+        assert_eq!(engine.snapshot().unwrap().sources.len(), 1);
+        assert_eq!(engine.revision.load(Ordering::SeqCst), revision);
+    }
+
+    #[test]
+    fn upscale_save_enforces_source_limit_but_existing_result_remains_idempotent() {
+        let (root, engine, _media) = fixture();
+        let job = result_folder(root.path());
+        let saved = engine.accept_upscale_source(&job, 0).unwrap();
+        {
+            let mut runtime = engine.inner.lock().unwrap();
+            let template = runtime.state.sources[0].clone();
+            for index in 2..100 {
+                let mut extra = template.clone();
+                extra.id = format!("source-{index}");
+                runtime.state.sources.push(extra);
+            }
+        }
+        assert_eq!(engine.accept_upscale_source(&job, 0).unwrap().id, saved.id);
+        let another = root.path().join("upscaled").join("another-job");
+        fs::create_dir(&another).unwrap();
+        let revision = engine.revision.load(Ordering::SeqCst);
+        assert!(engine
+            .accept_upscale_source(&another, revision)
+            .unwrap_err()
+            .contains("100"));
+    }
+
+    #[test]
+    fn save_state_normalizes_authoritative_folder_array_before_location_validation() {
+        let (_root, engine, _media) = fixture();
+        let mut state = engine.snapshot().unwrap();
+        state.sources[0].location.clear();
+        state.sources[0].folders = vec![SourceFolder {
+            location: "selected".into(),
+            name: None,
+        }];
+        let saved = engine.save_state(state).unwrap();
+        assert_eq!(saved.sources[0].location, "selected");
+    }
+}

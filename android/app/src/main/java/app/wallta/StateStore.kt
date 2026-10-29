@@ -62,6 +62,8 @@ class StateStore(private val context: Context) {
             require(source.getString("id").length in 1..128 && ids.add(source.getString("id"))) { "Invalid source ID" }
             require(source.getString("kind") in listOf("local", "url", "manifest", "webdav", "drive", "photos"))
             require(source.getString("location").length <= 8192)
+            SourceFolders.normalize(source)
+            SourceFolders.relayScope(source, root.optJSONObject("relayPending:${source.getString("id")}")?.takeIf { it.optString("phase") == "ready" } ?: root.optJSONObject("relay:${source.getString("id")}"))
             val previous = (0 until old.length()).map { old.getJSONObject(it) }.find { it.optString("id") == source.getString("id") }
             secretKeys.forEach { k -> if (!source.has(k) && previous?.optString("kind") == source.optString("kind") && previous.has(k)) source.put(k, previous.get(k)) }
         }
@@ -85,7 +87,8 @@ class StateStore(private val context: Context) {
             val type = if (source.optString("kind") == "photos") "google" else if (source.optString("kind") == "drive") "relay" else if (source.optString("kind") == "local" && source.optString("location").startsWith("wallta-import://")) "import" else continue
             val pending = root.optJSONObject("${type}Pending:$id") ?: continue
             val location = if (type == "google") pending.optString("deviceId") else if (type == "import") pending.optString("location") else pending.optString("folder")
-            if (pending.optString("phase") == "ready" && source.optString("location") == location) {
+            val connectedWithoutFolder = type == "relay" && !source.optBoolean("enabled", true) && source.optString("location").isBlank()
+            if (pending.optString("phase") == "ready" && (source.optString("location") == location || connectedWithoutFolder)) {
                 if (type == "relay") {
                     val active = root.optJSONObject("relay:$id")
                     if (active?.optString("nonce") != pending.optString("nonce") || active?.optString("relayUrl") != pending.optString("relayUrl")) {

@@ -25,11 +25,12 @@ object Net {
         while (true) { check(!Thread.currentThread().isInterrupted) { "Read operation cancelled" }; val n = input.read(buffer); if (n < 0) break; total += n; require(total <= limit) { "Response exceeds size limit" }; out.write(buffer, 0, n) }
         return out.toByteArray()
     }
-    fun bytes(url: String, limit: Int, headers: Map<String, String> = emptyMap(), method: String = "GET", body: String? = null, type: String = "application/json", tag: String? = null): ByteArray {
+    fun bytes(url: String, limit: Int, headers: Map<String, String> = emptyMap(), method: String = "GET", body: String? = null, type: String = "application/json", tag: String? = null, allowedUrl: ((String) -> Boolean)? = null): ByteArray {
         require(Policy.http(url)) { "Only HTTP(S) sources are supported" }
         var target = url; var auth = headers
         repeat(6) {
             check(!Thread.currentThread().isInterrupted) { "Network operation cancelled" }
+            require(allowedUrl == null || allowedUrl(target)) { "Redirect is outside the selected source folders" }
             val request = Request.Builder().url(target).tag(listOfNotNull(tag, requestScope.get()).toSet()).apply { auth.forEach { (k, v) -> header(k, v) }; method(method, body?.toRequestBody(type.toMediaType())) }.build()
             client.newCall(request).execute().use { response ->
                 if (response.code in listOf(301, 302, 303, 307, 308)) {
