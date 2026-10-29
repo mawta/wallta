@@ -11,9 +11,9 @@ Từ 0.1.2, mở **Cài đặt → Cập nhật** để kiểm tra, tải và c�
 ## Bộ ảnh đầu tiên
 
 1. Mở **Nguồn ảnh → Thêm nguồn ảnh**, chọn nguồn trên thiết bị, đặt tên và **Chọn thư mục ảnh**. Có thể chọn USB và bật quét thư mục con.
-2. Bấm **Thêm nguồn ảnh**, trở về **Tổng quan**, bấm **Đổi ảnh ngay** để thử. Với TV, trở về Home để xác nhận launcher thật sự hiển thị wallpaper.
+2. Bấm **Lưu & áp dụng** để đổi ảnh ngay và bật tự đổi. Bỏ chọn **Áp dụng sau khi lưu** nếu chỉ muốn lưu nguồn. Với TV, trở về Home để xác nhận launcher thật sự hiển thị wallpaper.
 3. Trong **Lịch & hiển thị**, chọn nhịp đổi ảnh, ngẫu nhiên/tuần tự, cách lấp đầy và lịch ngày/giờ nếu cần. Bấm **Lưu cài đặt**.
-4. Bật chế độ tự động ở **Tổng quan**. Trong **Cài đặt**, bật **Khởi động cùng thiết bị** nếu muốn khôi phục lịch sau reboot/đăng nhập.
+4. Trên Windows, giữ chọn **Khởi động cùng Windows** khi lưu và áp dụng nếu muốn chạy sau đăng nhập. Có thể đổi tùy chọn này trong **Cài đặt → Khởi động cùng thiết bị**; bật/tắt tự đổi ở **Tổng quan**.
 
 Android đổi wallpaper nền tối thiểu 15 phút và có thể trễ do Doze/chính sách pin. Windows cần Wallta còn chạy ở khay hệ thống; đóng cửa sổ sẽ ẩn xuống khay, chọn Quit sẽ dừng ứng dụng.
 
