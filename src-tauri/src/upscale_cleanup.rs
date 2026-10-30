@@ -90,8 +90,14 @@ pub(crate) fn startup(
     if let (Some(base), Some(references)) = (managed_base(root, "upscaled"), references) {
         for entry in fs::read_dir(base).map_err(|e| e.to_string())? {
             let path = entry.map_err(|e| e.to_string())?.path();
-            // A durable collection remains user-owned even after its source is removed.
-            if path.join("collection.json").is_file() {
+            // Completed hex folders, including legacy versions without a manifest,
+            // remain user-owned after their source is removed. Storage can list and
+            // explicitly delete them. Only unpublished .pending copies are reclaimed.
+            if path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(owned_job)
+            {
                 continue;
             }
             remove_unreferenced(root, &path, references)?;
@@ -142,6 +148,21 @@ fn validate_tree(path: &Path) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn startup_preserves_legacy_owned_collections_without_source_references() {
+        let temp = std::env::temp_dir().join(format!("wallta-legacy-owned-{}", std::process::id()));
+        let root = temp.join("root");
+        let collection = root.join("upscaled/0123456789abcdef0123456789abcdef");
+        fs::create_dir_all(&collection).unwrap();
+        fs::write(collection.join("001.jpg"), b"legacy durable result").unwrap();
+        startup(&temp.join("cache"), &root, Some(&[])).unwrap();
+        assert!(
+            collection.join("001.jpg").is_file(),
+            "Legacy saved files must remain discoverable in storage"
+        );
+        fs::remove_dir_all(&temp).unwrap();
+    }
 
     #[test]
     fn collection_ids_cannot_escape_or_delete_arbitrary_folders() {
@@ -212,7 +233,7 @@ mod tests {
     }
 
     #[test]
-    fn startup_removes_owned_orphans_and_preserves_referenced_collections() {
+    fn startup_removes_temporary_jobs_and_pending_copies_but_preserves_collections() {
         let temp =
             std::env::temp_dir().join(format!("wallta-upscale-cleanup-{}", std::process::id()));
         fs::create_dir_all(&temp).unwrap();
@@ -236,7 +257,7 @@ mod tests {
         let protected = outputs.join(kept).canonicalize().unwrap();
         startup(&cache, &root, Some(&[protected])).unwrap();
         assert!(!jobs.join(owned).exists());
-        assert!(!outputs.join(owned).exists());
+        assert!(outputs.join(owned).exists());
         assert!(!outputs.join(format!(".{owned}.pending")).exists());
         assert!(jobs.join("user-folder/image.jpg").exists());
         assert!(outputs.join(kept).join("image.jpg").exists());
