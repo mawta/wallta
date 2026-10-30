@@ -1583,6 +1583,33 @@ mod upscale_engine_tests {
     }
 
     #[test]
+    fn enabling_saved_upscale_source_lists_images_after_reopening() {
+        let (root, engine, _) = fixture();
+        let output = root
+            .path()
+            .join("upscaled/0123456789abcdef0123456789abcdef");
+        fs::create_dir_all(&output).unwrap();
+        fs::write(output.join("001.jpg"), b"saved-image").unwrap();
+        let revision = engine.revision.load(Ordering::SeqCst);
+        let saved = engine.accept_upscale_source(&output, revision).unwrap();
+        let mut state = engine.snapshot().unwrap();
+        for source in &mut state.sources {
+            source.enabled = source.id == saved.id;
+        }
+        engine.save_state(state).unwrap();
+        let images = engine.list_media().unwrap();
+        assert_eq!(images.len(), 1);
+        assert_eq!(images[0].source_id, saved.id);
+        assert!(PathBuf::from(&images[0].url).is_file());
+        let reopened =
+            Engine::new(Store::new(root.path().into(), root.path().join("cache")).unwrap())
+                .unwrap();
+        let images = reopened.list_media().unwrap();
+        assert_eq!(images.len(), 1);
+        assert_eq!(images[0].source_id, saved.id);
+    }
+
+    #[test]
     fn upscale_save_preserves_fresh_state_and_is_idempotent_after_revision_changes() {
         let (root, engine, _media) = fixture();
         let path = result_folder(root.path());
