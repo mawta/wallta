@@ -1,6 +1,6 @@
 [package]
 name = "wallta"
-version = "0.1.8"
+version = "0.1.9"
 description = "Wallta wallpaper rotation"
 authors = ["Wallta"]
 edition = "2021"

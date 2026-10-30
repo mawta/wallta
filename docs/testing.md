@@ -2,6 +2,12 @@
 
 Đối chiếu mã nguồn và bằng chứng thực thi; CI build không thay thế kiểm tra trên thiết bị. Windows chưa ký Authenticode; APK từ 0.1.2 dùng khóa phát hành cố định.
 
+## Bổ sung trong 0.1.9
+
+- Sửa bộ quét nguồn local trên Windows: tiền tố đường dẫn canonical `\\?\` được xử lý như đường dẫn file, không phải query URL. Các bộ ảnh upscale đã lưu được đọc lại sau khi cập nhật và làm mới thư viện, không cần xử lý ảnh lại.
+- Regression test tạo thư mục canonical thật, kiểm tra JPG/PNG, bỏ qua metadata, giữ bộ lọc URL online và kiểm tra lưu/bật nguồn rồi mở lại engine.
+- Kiểm tra trực tiếp trên Windows bằng bộ quét production: bộ ảnh đã lưu được đọc đủ 146 ảnh, không thay đổi dữ liệu.
+
 ## Bổ sung trong 0.1.8
 
 - React: **94 tests** và production build đạt; ngôn ngữ thiết bị, chọn/nhớ ngôn ngữ, storage bị chặn, đổi ngay khi form đang mở, giữ tên nguồn, template lỗi native và giữ chẩn đoán chưa biết.

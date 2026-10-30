@@ -66,6 +66,16 @@ pub fn is_image(path: &str) -> bool {
         .iter()
         .any(|e| lower.ends_with(e))
 }
+fn is_local_image(path: &Path) -> bool {
+    // A canonical Windows path starts with \\?\; it is not a URL query.
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            ["jpg", "jpeg", "png", "webp", "bmp", "gif"]
+                .iter()
+                .any(|supported| extension.eq_ignore_ascii_case(supported))
+        })
+}
 pub fn bounded_response(response: Response, limit: u64) -> Result<Vec<u8>, String> {
     let response =
         response
@@ -409,7 +419,7 @@ fn local_list_excluding(
                     pending.push_back((entry.path(), depth + 1));
                 }
             } else if kind.is_file()
-                && is_image(&entry.path().to_string_lossy())
+                && is_local_image(&entry.path())
                 && files.insert(entry.path().canonicalize().map_err(|e| e.to_string())?)
             {
                 result.push(item(
@@ -734,6 +744,33 @@ pub fn download(client: &Client, media: &MediaItem, source: &Source) -> Result<V
 #[cfg(test)]
 mod webdav_tests {
     use super::*;
+
+    #[test]
+    fn canonical_local_folders_list_upscaled_images() {
+        let root = tempfile::tempdir().unwrap();
+        let output = root
+            .path()
+            .join("upscaled/0123456789abcdef0123456789abcdef");
+        fs::create_dir_all(&output).unwrap();
+        fs::write(output.join("001.jpg"), b"saved image").unwrap();
+        fs::write(output.join("002.PNG"), b"saved image").unwrap();
+        fs::write(output.join("collection.json"), b"{}").unwrap();
+        let output = output.canonicalize().unwrap();
+        let source: Source = serde_json::from_value(serde_json::json!({
+            "id":"upscaled", "name":"Saved 4K", "kind":"local",
+            "location":output, "recursive":false, "enabled":true
+        }))
+        .unwrap();
+        let listed = local_list(&source).unwrap();
+        assert_eq!(
+            listed.len(),
+            2,
+            "canonical Windows paths must remain readable"
+        );
+        assert!(listed.iter().all(|item| Path::new(&item.url).is_file()));
+        assert!(is_image("https://example.com/photo.JPG?token=abc"));
+        assert!(!is_image("https://example.com/collection.json?name=photo.jpg"));
+    }
 
     #[test]
     fn managed_subtree_is_excluded_before_local_recursion_limits() {

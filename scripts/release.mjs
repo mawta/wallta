@@ -6,7 +6,7 @@ import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 
 export const repository = 'mawta/wallta';
-export const releaseNotes = 'English and Vietnamese interface with device-language defaults and a saved language selector in Settings. Bilingual offline help, updates, upscaling and LAN transfer page. English project introduction and installation guide in README. Original photos, source names and connections are preserved.';
+export const releaseNotes = 'Fix saved upscaled collections showing zero images on Windows. Local image scanning now supports canonical Windows paths. Existing collections and photos are preserved; refresh the library after updating.';
 const readJson = async path => JSON.parse(await readFile(path,'utf8'));
 const sha256 = data => createHash('sha256').update(data).digest('hex');
 const requireValue = (value,message) => { if (!value) throw new Error(message); return value; };
