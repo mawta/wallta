@@ -55,3 +55,16 @@ it('shows saved real previews after a partial failure without requiring another 
  expect([...host.querySelectorAll('button')].some(b=>b.textContent?.includes('Lưu ảnh 4K'))).toBe(false);
 });
 it('does not offer AI on Android TV',async()=>{await render({platform:'android-tv'});expect(host.querySelector('option[value="ai"]')?.hasAttribute('disabled')).toBe(true);});
+it('excludes managed result sources from All and never submits selections hidden by another source scope',async()=>{
+ vi.mocked(callNative).mockImplementation(async command=>command==='upscale_storage'?{cacheBytes:0,collections:[{sourceId:'generated'}]} as never:idle as never);
+ await render({initialIds:['img2'],sources:[source,{...source,id:'other',name:'Other'},{...source,id:'generated',name:'Generated'}]});
+ expect(host.querySelector('option[value="generated"]')).toBeNull();await choose('Nguồn upscale','other');
+ expect([...host.querySelectorAll('button')].find(b=>b.textContent==='Chạy ảnh đã chọn')?.disabled).toBe(true);
+});
+it('excludes a collection published while the same configuration dialog remains open',async()=>{
+ vi.mocked(callNative).mockResolvedValue({cacheBytes:0,collections:[]} as never);
+ controller.active=true;controller.status={...idle,jobId:'j',phase:'processing'};await render();
+ controller.active=false;controller.status={...idle,jobId:'j',phase:'ready',source:{...source,id:'new-result'}};
+ await render({sources:[source,{...source,id:'new-result',name:'New result'}]});
+ expect(host.querySelector('option[value="new-result"]')).toBeNull();
+});

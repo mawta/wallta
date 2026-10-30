@@ -40,4 +40,13 @@ it('restores an active native run without silently enabling automatic apply',asy
  nativeStatus={...processing,phase:'ready',source:{id:'saved',name:'4K',kind:'local',location:'managed',enabled:false,recursive:true}} as typeof idle;
  await act(async()=>vi.advanceTimersByTimeAsync(800));expect(applied).not.toHaveBeenCalled();
 });
+it('blocks a new queue until automatic apply has finished',async()=>{
+ let release!:()=>void;applied.mockImplementation(()=>new Promise<boolean>(resolve=>{release=()=>resolve(true);}));
+ await act(async()=>root.render(<Harness/>));await act(async()=>{await controller.start({all:true,mode:'fast',apply:true});});
+ nativeStatus={...processing,phase:'ready',source:{id:'saved',name:'4K',kind:'local',location:'managed',enabled:false,recursive:true}};
+ await act(async()=>{vi.advanceTimersByTime(800);await Promise.resolve();await Promise.resolve();});
+ expect(applied).toHaveBeenCalledOnce();expect(controller.busy).toBe(true);
+ await act(async()=>{expect(await controller.start({all:true,mode:'fast',apply:false})).toBe(false);});
+ await act(async()=>{release();await Promise.resolve();});expect(controller.busy).toBe(false);
+});
 
