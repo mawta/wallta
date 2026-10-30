@@ -8,6 +8,8 @@
 - Regression test tạo thư mục canonical thật, kiểm tra JPG/PNG, bỏ qua metadata, giữ bộ lọc URL online và kiểm tra lưu/bật nguồn rồi mở lại engine.
 - Kiểm tra trực tiếp trên Windows bằng bộ quét production: bộ ảnh đã lưu được đọc đủ 146 ảnh, không thay đổi dữ liệu.
 
+- **154 Rust tests** và bộ cài Windows đạt trên [CI](https://github.com/mawta/wallta/actions/runs/41040937742); **111 Android tests**, 0 lỗi/skip và APK đạt trên [CI](https://github.com/mawta/wallta/actions/runs/41040937519). **94 frontend tests**, production build và **12 release-tool tests** đạt. [Bộ cài công khai, checksum và chữ ký](artifacts.md).
+
 ## Bổ sung trong 0.1.8
 
 - React: **94 tests** và production build đạt; ngôn ngữ thiết bị, chọn/nhớ ngôn ngữ, storage bị chặn, đổi ngay khi form đang mở, giữ tên nguồn, template lỗi native và giữ chẩn đoán chưa biết.
