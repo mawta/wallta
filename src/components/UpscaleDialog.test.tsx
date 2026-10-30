@@ -79,3 +79,11 @@ it('excludes a collection published while the same configuration dialog remains 
  await render({sources:[source,{...source,id:'new-result',name:'New result'}]});
  expect(host.querySelector('option[value="new-result"]')).toBeNull();
 });
+it('offers an aligned slider for completed pairs and opens the saved output by native identity',async()=>{
+ const onPreview=vi.fn();
+ controller.status={...idle,jobId:'job',phase:'ready',completed:1,total:1,source:{...source,id:'saved'},results:[{id:'img0',mediaId:'saved-image',sourceId:'saved',name:'Photo',width:3840,height:2160,originalPreview:'/before.jpg',resultPreview:'/after.jpg'}]};
+ await render({onPreview});
+ expect(host.querySelector('input[type="range"]')).not.toBeNull();
+ await click('Xem ảnh');
+ expect(onPreview).toHaveBeenCalledWith({id:'saved-image',sourceId:'saved',name:'Photo',url:'/after.jpg'});
+});

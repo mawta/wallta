@@ -1,5 +1,13 @@
 /** Bundled English UI translations. Vietnamese keys match the authored UI. */
 export const english: Record<string, string> = {
+  "Xem trước ảnh": "Photo preview",
+  "Xem trước {0}": "Preview {0}",
+  "Vừa cửa sổ": "Fit to window",
+  "Đang tải ảnh…": "Loading photo…",
+  "Không thể tải ảnh.": "Could not load photo.",
+  "Không tìm thấy ảnh gốc để so sánh.": "Original unavailable for comparison.",
+  "So sánh Trước / Sau": "Compare Before / After",
+  "Vùng xem ảnh": "Photo viewing area",
   "Tổng quan": "Overview",
   "Nguồn ảnh": "Sources",
   "Lịch & hiển thị": "Schedule & display",

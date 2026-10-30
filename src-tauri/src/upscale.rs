@@ -67,6 +67,10 @@ pub struct UpscaleResult {
     pub height: u32,
     pub original_preview: String,
     pub result_preview: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub media_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -607,6 +611,13 @@ impl UpscaleManager {
                 // Authorize the direct owned folder before writing or publishing any output.
                 let collection = cleanup::collection_path(&self.engine.store.root, job)?;
                 let path = collection.join(format!("{:03}.jpg", manifest.count + 1));
+                crate::photo_preview::record_original(
+                    &collection,
+                    path.file_name()
+                        .and_then(|name| name.to_str())
+                        .ok_or("Invalid saved image name.")?,
+                    &media,
+                )?;
                 storage::atomic_write(&path, &output)?;
                 manifest.count += 1;
                 manifest.bytes += output.len() as u64;
@@ -635,7 +646,7 @@ impl UpscaleManager {
                 state.status.source = Some(source.clone());
                 state.status.completed += 1;
                 state.status.processed += 1;
-                manifest.source_id = Some(source.id);
+                manifest.source_id = Some(source.id.clone());
                 // Retain at most twenty preview pairs, regardless of the batch size.
                 if state.status.results.len() < MAX_PREVIEWS {
                     let before_path = directory.join(format!("{index}-before.jpg"));
@@ -649,6 +660,18 @@ impl UpscaleManager {
                         height,
                         original_preview: before_path.to_string_lossy().into_owned(),
                         result_preview: after_path.to_string_lossy().into_owned(),
+                        media_id: Some(
+                            crate::providers::item(
+                                path.canonicalize()
+                                    .map_err(|e| e.to_string())?
+                                    .to_string_lossy()
+                                    .into_owned(),
+                                None,
+                                &source.id,
+                            )
+                            .id,
+                        ),
+                        source_id: Some(source.id.clone()),
                     });
                 }
                 Ok(())

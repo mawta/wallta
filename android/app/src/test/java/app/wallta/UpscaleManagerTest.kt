@@ -38,7 +38,7 @@ class UpscaleManagerTest {
             val folder = File(durable, jobId).apply { mkdirs() }
             output.file.copyTo(File(folder, "$index.img"))
             commits++; currentRevision++
-            return UpscaleManager.Publication(JSONObject().put("id", "saved").put("name", "Ảnh 4K").put("enabled", false), currentRevision)
+            return UpscaleManager.Publication(JSONObject().put("id", "saved").put("name", "Ảnh 4K").put("enabled", false), currentRevision, Policy.hash("$jobId:$index"), "saved")
         }
         fun cleanup() { root.deleteRecursively() }
     }
@@ -59,6 +59,9 @@ class UpscaleManagerTest {
             assertEquals(75, status.getInt("total")); assertEquals(75, status.getInt("completed")); assertEquals(75, status.getInt("processed"))
             assertEquals(0, status.getInt("failed")); assertEquals(20, status.getJSONArray("results").length())
             assertEquals(75, env.commits); assertEquals(1, env.durable.listFiles()!!.size)
+            assertEquals(Policy.hash("$id:0"), status.getJSONArray("results").getJSONObject(0).getString("mediaId"))
+            assertEquals("saved", status.getJSONArray("results").getJSONObject(0).getString("sourceId"))
+            assertNotEquals(env.library.first().id, status.getJSONArray("results").getJSONObject(0).getString("mediaId"))
             assertEquals(75, File(env.durable, id).listFiles()!!.size)
             assertFalse(status.getJSONObject("source").getBoolean("enabled"))
             assertEquals(manager.save(id).toString(), manager.save(id).toString())

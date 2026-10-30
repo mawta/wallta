@@ -3,6 +3,7 @@ pub mod google;
 mod google_drive;
 mod lan_commands;
 pub mod models;
+mod photo_preview;
 pub mod providers;
 pub mod rotation;
 pub mod storage;
@@ -120,6 +121,7 @@ pub fn run() {
             commands::pick_folder,
             commands::list_media,
             commands::get_preview,
+            commands::get_photo_preview,
             commands::next_wallpaper,
             commands::set_running,
             commands::get_capabilities,

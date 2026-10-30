@@ -48,7 +48,7 @@ internal object UpscaleFiles {
         validateTree(file); deleteValidated(file)
     }
     fun clearCacheFolder(cache: File, name: String) {
-        require(name in listOf("media", "visual", "upscale", "upscale-results"))
+        require(name in listOf("media", "visual", "photo-preview", "upscale", "upscale-results"))
         val base = root(cache); val target = File(base, name)
         if (!Files.exists(target.toPath(), LinkOption.NOFOLLOW_LINKS)) return
         require(plain(target, true) && target.canonicalFile.parentFile == base)
@@ -106,7 +106,11 @@ internal class UpscaleCollections(private val context: Context, private val stor
         val items = manifest.getJSONArray("items")
         check(index == items.length()) { "Collection append is out of order" }
         UpscaleFiles.atomicWrite(File(folder, name), output.file.readBytes())
-        items.put(JSONObject().put("file", name).put("name", output.name))
+        val item = JSONObject().put("file", name).put("name", output.name)
+        if (output.sourceId != null && output.id.matches(Regex("[a-f0-9]{64}"))) {
+            item.put("original", JSONObject().put("id", output.id).put("sourceId", output.sourceId))
+        }
+        items.put(item)
         manifest.put("source", source)
         UpscaleFiles.atomicWrite(manifestFile, manifest.toString().toByteArray())
         // Only the manager's own append is rebased. An external save before this gate
@@ -115,7 +119,7 @@ internal class UpscaleCollections(private val context: Context, private val stor
         if (existing == null) sources.put(source)
         store.put("catalog:$id", null)
         store.save(state)
-        UpscaleManager.Publication(JSONObject(source.toString()), store.revision())
+        UpscaleManager.Publication(JSONObject(source.toString()), store.revision(), Policy.hash("$id:$location:$name"), id)
     }
     private fun readManifest(folder: File, id: String): JSONObject {
         val file = File(folder, "collection.json")
@@ -205,6 +209,17 @@ internal class UpscaleCollections(private val context: Context, private val stor
         val name = url.substring(slash + 1); require(name.matches(Regex("[a-f0-9]{64}\\.img")))
         return File(UpscaleFiles.child(root, job), name).also { require(UpscaleFiles.plain(it, false)) }
     }
+    fun original(media: Media): Pair<String, String>? {
+        val location = media.url.substringBeforeLast('/')
+        val job = locationId(location) ?: return null
+        require(media.sourceId == sourceId(job))
+        val item = readManifest(UpscaleFiles.child(root, job), job).getJSONArray("items").let { items ->
+            (0 until items.length()).map { items.getJSONObject(it) }.find { it.optString("file") == media.url.substringAfterLast('/') }
+        } ?: return null
+        val original = item.optJSONObject("original") ?: return null
+        val id = original.optString("id"); val source = original.optString("sourceId")
+        return (id to source).takeIf { id.matches(Regex("[a-f0-9]{64}")) && source.length in 1..128 }
+    }
     fun storage(): JSONObject = synchronized(StateStore.lock) {
         val sources = store.state().getJSONArray("sources")
         val locations = (0 until sources.length()).associate { sources.getJSONObject(it).optString("location") to sources.getJSONObject(it).optString("id") }
@@ -215,7 +230,7 @@ internal class UpscaleCollections(private val context: Context, private val stor
                 .put("model", JSONObject.NULL).put("createdAt", if (owned.legacy) JSONObject.NULL else owned.manifest.opt("createdAt") ?: JSONObject.NULL)
                 .put("count", entries.size).put("bytes", entries.sumOf { it.first.length() }).put("sourceId", locations[owned.source.optString("location")] ?: JSONObject.NULL))
         }
-        val bytes = listOf("media", "visual", "upscale", "upscale-results").sumOf { name ->
+        val bytes = listOf("media", "visual", "photo-preview", "upscale", "upscale-results").sumOf { name ->
             val dir = File(cacheRoot, name)
             if (!dir.exists()) 0L else { require(UpscaleFiles.plain(dir, true)); UpscaleFiles.validateTree(dir); dir.walkTopDown().filter { it.isFile }.sumOf { it.length() } }
         }
@@ -223,9 +238,9 @@ internal class UpscaleCollections(private val context: Context, private val stor
     }
     fun clearCache(): JSONObject = synchronized(StateStore.lock) {
         // Preflight all targets before invalidating state or deleting any cache.
-        listOf("media", "visual", "upscale", "upscale-results").map { File(cacheRoot, it) }.filter { it.exists() }.forEach { UpscaleFiles.validateTree(it) }
+        listOf("media", "visual", "photo-preview", "upscale", "upscale-results").map { File(cacheRoot, it) }.filter { it.exists() }.forEach { UpscaleFiles.validateTree(it) }
         store.invalidateCache()
-        listOf("media", "visual", "upscale", "upscale-results").forEach { UpscaleFiles.clearCacheFolder(cacheRoot, it) }
+        listOf("media", "visual", "photo-preview", "upscale", "upscale-results").forEach { UpscaleFiles.clearCacheFolder(cacheRoot, it) }
         store.put("cacheOwners", null)
         storage()
     }
