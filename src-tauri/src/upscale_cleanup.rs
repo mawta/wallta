@@ -4,14 +4,14 @@ use std::{
     path::{Path, PathBuf},
 };
 
-fn owned_job(name: &str) -> bool {
+pub(super) fn owned_job(name: &str) -> bool {
     name.len() == 32
         && name
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
-fn plain_directory(path: &Path) -> bool {
+pub(super) fn plain_directory(path: &Path) -> bool {
     let Ok(metadata) = fs::symlink_metadata(path) else {
         return false;
     };
@@ -25,7 +25,7 @@ fn plain_directory(path: &Path) -> bool {
     metadata.is_dir() && !metadata.file_type().is_symlink()
 }
 
-fn managed_base(root: &Path, relative: &str) -> Option<PathBuf> {
+pub(super) fn managed_base(root: &Path, relative: &str) -> Option<PathBuf> {
     let root = root.canonicalize().ok()?;
     let base = root.join(relative);
     if !plain_directory(&base) {
@@ -89,7 +89,51 @@ pub(crate) fn startup(
     }
     if let (Some(base), Some(references)) = (managed_base(root, "upscaled"), references) {
         for entry in fs::read_dir(base).map_err(|e| e.to_string())? {
-            remove_unreferenced(root, &entry.map_err(|e| e.to_string())?.path(), references)?;
+            let path = entry.map_err(|e| e.to_string())?.path();
+            // A durable collection remains user-owned even after its source is removed.
+            if path.join("collection.json").is_file() {
+                continue;
+            }
+            remove_unreferenced(root, &path, references)?;
+        }
+    }
+    Ok(())
+}
+
+/// Return only a direct, non-reparse owned folder. Never accept caller paths.
+pub(super) fn collection_path(root: &Path, id: &str) -> Result<PathBuf, String> {
+    if !owned_job(id) {
+        return Err("Invalid managed collection ID.".into());
+    }
+    let base = managed_base(root, "upscaled").ok_or("Managed collections are unavailable.")?;
+    let path = base.join(id);
+    if !plain_directory(&path) {
+        return Err("Collection contains an unsafe link.".into());
+    }
+    let canonical = path.canonicalize().map_err(|e| e.to_string())?;
+    if canonical.parent() != Some(base.as_path()) {
+        return Err("Collection escapes managed storage.".into());
+    }
+    validate_tree(&canonical)?;
+    Ok(canonical)
+}
+
+fn validate_tree(path: &Path) -> Result<(), String> {
+    for entry in fs::read_dir(path).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let metadata = fs::symlink_metadata(entry.path()).map_err(|e| e.to_string())?;
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt;
+            if metadata.file_attributes() & 0x400 != 0 {
+                return Err("Collection contains a reparse point.".into());
+            }
+        }
+        if metadata.file_type().is_symlink() {
+            return Err("Collection contains a symbolic link.".into());
+        }
+        if metadata.is_dir() {
+            validate_tree(&entry.path())?;
         }
     }
     Ok(())
@@ -98,6 +142,74 @@ pub(crate) fn startup(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn collection_ids_cannot_escape_or_delete_arbitrary_folders() {
+        let temp = std::env::temp_dir().join(format!("wallta-owned-id-{}", std::process::id()));
+        let root = temp.join("root");
+        let owned = "0123456789abcdef0123456789abcdef";
+        fs::create_dir_all(root.join("upscaled").join(owned)).unwrap();
+        fs::create_dir_all(root.join("upscaled/holiday")).unwrap();
+        for id in [
+            "..",
+            "../holiday",
+            "holiday",
+            "C:\\outside",
+            "",
+            "0123456789ABCDEF0123456789ABCDEF",
+        ] {
+            assert!(collection_path(&root, id).is_err(), "{id}");
+        }
+        assert!(collection_path(&root, owned).is_ok());
+        fs::remove_dir_all(&temp).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn collection_rejects_directory_junctions_and_nested_reparse_points() {
+        use std::os::windows::process::CommandExt;
+        let temp = std::env::temp_dir().join(format!("wallta-owned-link-{}", std::process::id()));
+        let root = temp.join("root");
+        let outside = temp.join("outside");
+        let owned = "0123456789abcdef0123456789abcdef";
+        let folder = root.join("upscaled").join(owned);
+        fs::create_dir_all(&folder).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(outside.join("keep.jpg"), b"external").unwrap();
+        let link = folder.join("escape");
+        let output = std::process::Command::new("cmd.exe")
+            .args(["/C", "mklink", "/J"])
+            .arg(&link)
+            .arg(&outside)
+            .creation_flags(0x08000000)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "Could not create junction: {:?}",
+            output
+        );
+        assert!(collection_path(&root, owned).is_err());
+        fs::remove_dir(&link).unwrap();
+        assert!(outside.join("keep.jpg").is_file());
+        fs::remove_dir_all(&temp).unwrap();
+    }
+
+    #[test]
+    fn startup_retains_durable_manifest_collections_after_source_removal() {
+        let temp = std::env::temp_dir().join(format!("wallta-durable-{}", std::process::id()));
+        let root = temp.join("root");
+        let collection = root.join("upscaled/0123456789abcdef0123456789abcdef");
+        fs::create_dir_all(&collection).unwrap();
+        fs::write(collection.join("collection.json"), b"{}").unwrap();
+        fs::write(collection.join("001.jpg"), b"durable output").unwrap();
+        startup(&temp.join("cache"), &root, Some(&[])).unwrap();
+        assert!(
+            collection.join("001.jpg").is_file(),
+            "Saved collections must outlive source removal"
+        );
+        fs::remove_dir_all(&temp).unwrap();
+    }
 
     #[test]
     fn startup_removes_owned_orphans_and_preserves_referenced_collections() {
