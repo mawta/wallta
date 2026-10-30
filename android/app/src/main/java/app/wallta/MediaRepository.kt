@@ -280,7 +280,9 @@ class MediaRepository(private val context: Context, private val store: StateStor
             val s = b.getJSONObject(i); val id = s.getString("id"); val next = now.find { it.optString("id") == id }
             if (next == null || next.optString("location") != s.optString("location") || next.optString("kind") != s.optString("kind")) {
                 clearSource(id)
-                if (s.optString("location").startsWith("wallta-import://")) PhotoImporter(context, store).remove(id, s.getString("location"))
+                // Generated legacy images are durable collections. Disconnecting a
+                // source must leave their files for the explicit folder-delete flow.
+                if (s.optString("location").startsWith("wallta-import://") && UpscaleCollections.legacyJob(s) == null) PhotoImporter(context, store).remove(id, s.getString("location"))
                 val freshPhotos = next?.optString("kind") == "photos" && store.get("google:$id")?.optString("deviceId") == next.optString("location")
                 val relay = DriveRelay(store).session(id)
                 val retainedDriveConnection = s.optString("kind") == "drive" && next?.optString("kind") == "drive" &&

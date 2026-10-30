@@ -98,8 +98,10 @@ internal class UpscaleCollections(private val context: Context, private val stor
         check(folder.usableSpace >= output.file.length() + 16L * 1024 * 1024) { "Not enough free storage for 4K collection" }
         val manifestFile = File(folder, "collection.json")
         val manifest = if (manifestFile.exists()) readManifest(folder, job) else JSONObject().put("id", job).put("createdAt", Instant.now().toString()).put("model", JSONObject.NULL).put("items", JSONArray())
-        val originalName = (0 until sources.length()).map { sources.getJSONObject(it) }.find { it.optString("id") == output.sourceId }?.optString("name")?.take(80)
-        val source = existing ?: JSONObject().put("id", id).put("name", "Ảnh 4K • ${originalName ?: "Fast"} • ${manifest.getString("createdAt").take(10)}").put("kind", "local").put("location", location).put("recursive", false).put("enabled", false)
+        val originalName = (0 until sources.length()).map { sources.getJSONObject(it) }.find { it.optString("id") == output.sourceId }?.optString("name")
+        val scope = if (output.multipleSources) "Tất cả nguồn" else originalName?.filter { !it.isISOControl() }?.trim()?.take(48)?.ifBlank { null } ?: "Ảnh gốc"
+        val timestamp = manifest.getString("createdAt").take(19).replace('T', ' ')
+        val source = existing ?: JSONObject().put("id", id).put("name", "Ảnh 4K • $scope • Fast • $timestamp").put("kind", "local").put("location", location).put("recursive", false).put("enabled", false)
         val name = "${Policy.hash("$job:$index")}.img"
         val items = manifest.getJSONArray("items")
         check(index == items.length()) { "Collection append is out of order" }

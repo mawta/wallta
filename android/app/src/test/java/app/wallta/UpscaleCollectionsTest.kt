@@ -53,11 +53,20 @@ class UpscaleCollectionsTest {
         assertTrue(second.revision > first.revision); assertFalse(second.source.getBoolean("enabled"))
         assertEquals(2, store.state().getJSONArray("sources").length())
         assertTrue(second.source.getString("name").contains("Original photos"))
+        assertTrue(second.source.getString("name").contains(" • Fast • "))
+        assertTrue(second.source.getString("name").matches(Regex(".*[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}$")))
+        assertEquals(first.source.getString("name"), second.source.getString("name"))
         val item = collections.storage().getJSONArray("collections").getJSONObject(0)
         assertEquals(2, item.getInt("count")); assertNotNull(java.time.Instant.parse(item.getString("createdAt")))
         store.save(store.state())
         assertThrows(IllegalStateException::class.java) { collections.append(job, output, 2, second.revision) }
         assertEquals(2, collections.storage().getJSONArray("collections").getJSONObject(0).getInt("count"))
+    }
+    @Test fun multipleSourceRunUsesCapturedAllScopeInsteadOfItsFirstSource() = withStore { context, store, collections ->
+        val original = imported(context, store, false)
+        val result = collections.append(UUID.randomUUID().toString(), output(context, original.getString("id")).copy(multipleSources = true), 0, store.revision())
+        assertTrue(result.source.getString("name").contains("Tất cả nguồn • Fast •"))
+        assertFalse(result.source.getString("name").contains("Original photos"))
     }
     @Test fun originalSnapshotExcludesBothCurrentAndLegacyGeneratedCollections() = withStore { context, store, collections ->
         val original = imported(context, store, false); imported(context, store, true)
@@ -106,6 +115,16 @@ class UpscaleCollectionsTest {
         collections.delete(entries.getJSONObject(0).getString("id"))
         assertFalse(PhotoImporter.directory(context, legacy.getString("location")).exists())
         assertTrue(PhotoImporter.directory(context, original.getString("location")).exists())
+    }
+    @Test fun disconnectingLegacySourceKeepsDurableImagesWhileOrdinaryImportCleanupStillRuns() = withStore { context, store, collections ->
+        val original = imported(context, store, false); val legacy = imported(context, store, true)
+        val previous = store.state(); val updated = JSONObject(previous.toString()).put("sources", JSONArray())
+        store.save(updated); MediaRepository(context, store).cleanup(previous, updated)
+        assertTrue(PhotoImporter.directory(context, legacy.getString("location")).isDirectory)
+        assertFalse(PhotoImporter.directory(context, original.getString("location")).exists())
+        val owned = collections.storage().getJSONArray("collections")
+        assertEquals(1, owned.length()); assertEquals(1, owned.getJSONObject(0).getInt("count"))
+        assertTrue(owned.getJSONObject(0).isNull("sourceId"))
     }
     @Test fun canonicalPlatformRootAliasesWorkButOwnedSymlinkStillBlocksDeletionBeforeStateChanges() = withStore { context, store, collections ->
         val job = UUID.randomUUID().toString(); val source = collections.append(job, output(context), 0, store.revision()).source

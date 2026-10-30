@@ -9,7 +9,7 @@ import org.json.JSONObject
 
 /** One serial worker; state snapshots are short and never enter updater/store gates. */
 class UpscaleManager(private val environment: Environment) : AutoCloseable {
-    data class Output(val id: String, val name: String, val width: Int, val height: Int, val file: File, val before: File, val after: File, val sourceId: String? = null)
+    data class Output(val id: String, val name: String, val width: Int, val height: Int, val file: File, val before: File, val after: File, val sourceId: String? = null, val multipleSources: Boolean = false)
     data class Publication(val source: JSONObject, val revision: Long)
     class ImageFailure(message: String, cause: Throwable? = null) : Exception(message, cause)
     interface Environment {
@@ -87,6 +87,7 @@ class UpscaleManager(private val environment: Environment) : AutoCloseable {
             ensureCurrent(id)
             check(ids == null || selected.map { it.id } == ids) { "Selected images are no longer available" }
             require(selected.isNotEmpty()) { "No enabled original images in this selection" }
+            val multipleSources = selected.map { it.sourceId }.distinct().size > 1
             synchronized(this) { total = selected.size }
             for ((index, media) in selected.withIndex()) {
                 ensureCurrent(id); attempting = true
@@ -103,7 +104,7 @@ class UpscaleManager(private val environment: Environment) : AutoCloseable {
                     ensureCurrent(id)
                     if (System.nanoTime() - started > TimeUnit.MINUTES.toNanos(10)) throw ImageFailure("Image exceeded 10 minutes")
                     check(output.isFile && output.length() in 1..(64L * 1024 * 1024)) { "Invalid 4K output storage" }
-                    val rendered = Output(media.id, media.name.substringBeforeLast('.') + "-4K.jpg", size.first, size.second, output, before, after, media.sourceId)
+                    val rendered = Output(media.id, media.name.substringBeforeLast('.') + "-4K.jpg", size.first, size.second, output, before, after, media.sourceId, multipleSources)
                     val expected = synchronized(this) { revision }
                     val publication = environment.append(id, rendered, completed, expected)
                     // Cancellation may arrive after durable publication. Record that successful
