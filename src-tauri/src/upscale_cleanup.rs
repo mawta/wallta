@@ -35,6 +35,33 @@ pub(super) fn managed_base(root: &Path, relative: &str) -> Option<PathBuf> {
     canonical.starts_with(&root).then_some(canonical)
 }
 
+pub(super) fn canonical_with_missing_tail(path: &Path) -> Result<PathBuf, String> {
+    let mut ancestor = path.to_path_buf();
+    let mut missing = Vec::new();
+    loop {
+        match ancestor.canonicalize() {
+            Ok(mut canonical) => {
+                for name in missing.iter().rev() {
+                    canonical.push(name);
+                }
+                return Ok(canonical);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                missing.push(
+                    ancestor
+                        .file_name()
+                        .ok_or_else(|| error.to_string())?
+                        .to_os_string(),
+                );
+                if !ancestor.pop() {
+                    return Err(error.to_string());
+                }
+            }
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+}
+
 pub(crate) fn remove_unreferenced(
     root: &Path,
     path: &Path,
@@ -148,6 +175,22 @@ fn validate_tree(path: &Path) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn missing_owned_folder_retains_its_canonical_existing_parent() {
+        let temp =
+            std::env::temp_dir().join(format!("wallta-missing-owned-{}", std::process::id()));
+        let base = temp.join("upscaled");
+        fs::create_dir_all(&base).unwrap();
+        let missing = base.join("0123456789abcdef0123456789abcdef");
+        let normalized = canonical_with_missing_tail(&missing).unwrap();
+        assert!(
+            normalized.starts_with(base.canonicalize().unwrap()),
+            "Missing managed paths lost canonical containment: {normalized:?}"
+        );
+        assert!(!missing.exists());
+        fs::remove_dir_all(&temp).unwrap();
+    }
 
     #[test]
     fn startup_preserves_legacy_owned_collections_without_source_references() {

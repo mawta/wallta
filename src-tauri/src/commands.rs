@@ -149,7 +149,7 @@ impl Engine {
         {
             return Err("Waiting for Wi-Fi before downloading the original image.".into());
         }
-        let bytes = self.prepare(media, source, &snapshot.state.settings, revision)?;
+        let bytes = self.upscale_original(media, source, &snapshot.state.settings, revision)?;
         let runtime = self.inner.lock().map_err(|error| error.to_string())?;
         if !self.source_is_current(&runtime, source, revision) {
             return Err("Image request cancelled because settings changed.".into());
@@ -167,14 +167,16 @@ impl Engine {
             return Err("Sources changed during processing. Start a new job.".into());
         }
         let managed = self.store.root.join("upscaled");
-        let managed = managed.canonicalize().unwrap_or(managed);
+        let managed = crate::upscale::canonical_with_missing_tail(&managed)?;
         snapshot.state.sources.retain(|source| {
             source.enabled
                 && source_id.is_none_or(|id| source.id == id)
                 && !(source.kind == "local"
                     && source.effective_folders().iter().all(|location| {
                         let path = PathBuf::from(location);
-                        path.canonicalize().unwrap_or(path).starts_with(&managed)
+                        crate::upscale::canonical_with_missing_tail(&path)
+                            .unwrap_or(path)
+                            .starts_with(&managed)
                     }))
         });
         if source_id.is_some() && snapshot.state.sources.is_empty() {
@@ -222,7 +224,7 @@ impl Engine {
         {
             return Err("Waiting for Wi-Fi before downloading the original image.".into());
         }
-        let bytes = self.prepare(media, source, &snapshot.state.settings, revision)?;
+        let bytes = self.upscale_original(media, source, &snapshot.state.settings, revision)?;
         let runtime = self.inner.lock().map_err(|e| e.to_string())?;
         if !self.source_is_current(&runtime, source, revision) {
             return Err("Sources changed during processing. Start a new job.".into());
@@ -744,6 +746,20 @@ impl Engine {
                 .unwrap_or_else(|| "Không thể áp dụng ảnh từ thư mục đã chọn.".into()));
         }
         Ok(storage::public_state(&mut runtime.state))
+    }
+    /// Upscaling owns decode validation. Do not render or cache an unvalidated remote body.
+    fn upscale_original(
+        &self,
+        media: &MediaItem,
+        source: &Source,
+        settings: &Settings,
+        revision: u64,
+    ) -> Result<Vec<u8>, String> {
+        if source.kind == "local" || self.store.cache.join(format!("{}.img", media.id)).is_file() {
+            self.prepare(media, source, settings, revision)
+        } else {
+            providers::download(&self.client, media, source)
+        }
     }
     fn prepare(
         &self,
@@ -1300,6 +1316,23 @@ mod lan_engine_tests;
 #[cfg(test)]
 mod upscale_engine_tests {
     use super::*;
+
+    #[test]
+    fn all_ignores_missing_managed_sources_instead_of_aborting_originals() {
+        let (root, engine, _media) = fixture();
+        let managed = root.path().join("upscaled");
+        fs::create_dir(&managed).unwrap();
+        let mut source = engine.inner.lock().unwrap().state.sources[0].clone();
+        source.id = "upscale-missing".into();
+        source.location = managed
+            .join("0123456789abcdef0123456789abcdef")
+            .to_string_lossy()
+            .into_owned();
+        engine.inner.lock().unwrap().state.sources.push(source);
+        let items = engine.upscale_all_items(None, 0).unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].source_id, "original");
+    }
 
     #[test]
     fn worker_publication_cannot_rebase_an_external_collection_adoption() {

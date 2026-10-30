@@ -24,6 +24,22 @@ pub(super) const ARCHIVE_SHA256: &str =
     "abc02804e17982a3be33675e4d471e91ea374e65b70167abc09e31acb412802d";
 const INSTALL_DIRECTORY: &str = "realesrgan-20220424-x4plus";
 
+#[derive(Debug)]
+pub(super) enum ProcessFailure {
+    Item(String),
+    Fatal(String),
+}
+impl From<String> for ProcessFailure {
+    fn from(error: String) -> Self {
+        Self::Fatal(error)
+    }
+}
+impl From<&str> for ProcessFailure {
+    fn from(error: &str) -> Self {
+        Self::Fatal(error.into())
+    }
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelInfo {
@@ -424,7 +440,7 @@ pub(super) fn process(
     _directory: &Path,
     _cancel: &AtomicBool,
     _check: impl Fn() -> Result<(), String>,
-) -> Result<Vec<u8>, String> {
+) -> Result<Vec<u8>, ProcessFailure> {
     Err("AI processing requires Windows.".into())
 }
 
@@ -436,7 +452,7 @@ pub(super) fn process(
     directory: &Path,
     cancel: &AtomicBool,
     check: impl Fn() -> Result<(), String>,
-) -> Result<Vec<u8>, String> {
+) -> Result<Vec<u8>, ProcessFailure> {
     check()?;
     let model = models::selected(Some(model))?;
     verify_install(runtime, model)?;
@@ -483,10 +499,14 @@ pub(super) fn process(
                 return Err("Processing cancelled.".into());
             }
             if started.elapsed() > Duration::from_secs(10 * 60) {
-                return Err("AI processing exceeded the 10 minute image limit.".into());
+                return Err(ProcessFailure::Item(
+                    "AI processing exceeded the 10 minute image limit.".into(),
+                ));
             }
             if fs::metadata(&output).is_ok_and(|meta| meta.len() > MAX_OUTPUT) {
-                return Err("AI result exceeds its size limit.".into());
+                return Err(ProcessFailure::Item(
+                    "AI result exceeds its size limit.".into(),
+                ));
             }
             if let Some(success) = child.try_wait()? {
                 if !success {
@@ -499,12 +519,16 @@ pub(super) fn process(
         check()?;
         // NCNN creates a 4× image (up to 7680×4320); only this bounded
         // intermediate gets the 40 MP limit. Originals stay at 32 MP.
-        let image = decode_limited(&read_bounded(&output, MAX_OUTPUT)?, 40_000_000)?;
+        let image = decode_limited(&read_bounded(&output, MAX_OUTPUT)?, 40_000_000)
+            .map_err(ProcessFailure::Item)?;
         if image.width() != w * 4 || image.height() != h * 4 {
-            return Err("AI runtime returned unexpected dimensions.".into());
+            return Err(ProcessFailure::Item(
+                "AI runtime returned unexpected dimensions.".into(),
+            ));
         }
         let (target_w, target_h) = policy::target_dimensions(original.width(), original.height())?;
         jpeg(&image.resize_exact(target_w, target_h, FilterType::Lanczos3))
+            .map_err(ProcessFailure::Item)
     })();
     let _ = fs::remove_file(&input);
     let _ = fs::remove_file(&output);
