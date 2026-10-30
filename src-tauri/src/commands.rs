@@ -432,6 +432,7 @@ impl Engine {
             .cache_owners
             .retain(|_, owner| !removed.contains(&owner.source_id));
         persistent.shuffle = Default::default();
+        storage::reconcile_catalogs(&mut persistent, &next.sources, &self.store.cache);
         self.store.save_runtime(&persistent)?;
         self.store.save(&next)?;
         self.revision.fetch_add(1, Ordering::SeqCst);
@@ -844,6 +845,13 @@ impl Engine {
         Ok(bytes)
     }
     fn trim_cache(&self, limit_mb: u64, keep: Option<&std::path::Path>) -> Result<(), String> {
+        let keep = keep
+            .into_iter()
+            .map(|path| path.to_path_buf())
+            .collect::<Vec<_>>();
+        self.trim_cache_excluding(limit_mb, &keep)
+    }
+    fn trim_cache_excluding(&self, limit_mb: u64, keep: &[PathBuf]) -> Result<(), String> {
         let mut files: Vec<_> = fs::read_dir(&self.store.cache)
             .map_err(|e| e.to_string())?
             .filter_map(Result::ok)
@@ -863,7 +871,7 @@ impl Engine {
             if total <= limit_mb * 1024 * 1024 {
                 break;
             }
-            if keep == Some(path.as_path()) {
+            if keep.contains(&path) {
                 continue;
             }
             if fs::remove_file(path).is_ok() {
@@ -883,6 +891,61 @@ impl Engine {
         runtime.state = next;
         runtime.next_due = Instant::now();
         Ok(storage::public_state(&mut runtime.state))
+    }
+    pub(crate) fn photo_preview(
+        &self,
+        id: &str,
+        source_id: &str,
+    ) -> Result<crate::photo_preview::PhotoPreview, String> {
+        let (snapshot, revision) = self.operation_snapshot()?;
+        let mut known = snapshot.media.clone();
+        known.extend(snapshot.state.current.iter().cloned());
+        for source in &snapshot.state.sources {
+            if let Some(catalog) = snapshot
+                .persistent
+                .catalogs
+                .get(&source.id)
+                .filter(|catalog| catalog.fingerprint == storage::source_fingerprint(source))
+            {
+                known.extend(catalog.items.iter().cloned());
+            }
+        }
+        let prepared = crate::photo_preview::prepare(
+            &crate::photo_preview::Context {
+                root: &self.store.root,
+                client: &self.client,
+                sources: &snapshot.state.sources,
+                known: &known,
+                network_allowed: !snapshot.state.settings.wifi_only || wallpaper::wifi_connected(),
+            },
+            id,
+            source_id,
+        )?;
+        // Explicit viewing may read disabled sources without changing wallpaper eligibility.
+        let mut runtime = self.inner.lock().map_err(|e| e.to_string())?;
+        self.mutation_gate.ensure_open()?;
+        if self.revision.load(Ordering::SeqCst) != revision
+            || prepared.images().any(|image| {
+                !runtime.state.sources.iter().any(|source| {
+                    source.id == image.source.id
+                        && storage::source_fingerprint(source)
+                            == storage::source_fingerprint(&image.source)
+                })
+            })
+        {
+            return Err("Photo request cancelled because sources changed.".into());
+        }
+        for image in prepared.images() {
+            storage::own_cache(&mut runtime.persistent, &image.media, &image.source);
+        }
+        self.store.save_runtime(&runtime.persistent)?;
+        let preview = prepared.publish(&self.store.cache)?;
+        let mut keep = vec![PathBuf::from(&preview.image.url)];
+        keep.extend(preview.before.iter().map(|image| PathBuf::from(&image.url)));
+        self.trim_cache_excluding(runtime.state.settings.cache_limit_mb, &keep)?;
+        storage::prune_cache_owners(&mut runtime.persistent, &self.store.cache);
+        self.store.save_runtime(&runtime.persistent)?;
+        Ok(preview)
     }
     pub fn preview(&self, id: &str) -> Result<String, String> {
         let (snapshot, revision) = self.operation_snapshot()?;
@@ -1707,5 +1770,114 @@ mod upscale_engine_tests {
         }];
         let saved = engine.save_state(state).unwrap();
         assert_eq!(saved.sources[0].location, "selected");
+    }
+}
+
+#[tauri::command]
+pub async fn get_photo_preview(
+    id: String,
+    source_id: String,
+    engine: tauri::State<'_, Arc<Engine>>,
+) -> Result<crate::photo_preview::PhotoPreview, String> {
+    let engine = engine.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || engine.photo_preview(&id, &source_id))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[cfg(test)]
+mod photo_preview_tests {
+    use super::*;
+    #[test]
+    fn saved_pair_reopens_disabled_and_survives_cache_clear_and_deletes_with_collection() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = Store::new(temp.path().join("data"), temp.path().join("cache/media")).unwrap();
+        let original_dir = temp.path().join("originals");
+        fs::create_dir(&original_dir).unwrap();
+        let original_path = original_dir.join("original.png");
+        image::DynamicImage::new_rgb8(20, 10)
+            .save(&original_path)
+            .unwrap();
+        let engine = Arc::new(Engine::new(store.clone()).unwrap());
+        let mut state = engine.snapshot().unwrap();
+        state.sources.push(serde_json::from_value(serde_json::json!({"id":"original","name":"Original","kind":"local","location":original_dir})).unwrap());
+        engine.save_state(state).unwrap();
+        let original = engine.list_media().unwrap().remove(0);
+        let manager = Arc::new(crate::upscale::UpscaleManager::new(engine.clone()));
+        manager
+            .start(vec![original.id.clone()], crate::upscale::UpscaleMode::Fast)
+            .unwrap();
+        let start = Instant::now();
+        let status = loop {
+            let status = manager.status().unwrap();
+            if matches!(
+                status.phase,
+                crate::upscale::Phase::Ready
+                    | crate::upscale::Phase::Error
+                    | crate::upscale::Phase::Cancelled
+            ) {
+                break status;
+            }
+            assert!(start.elapsed() < Duration::from_secs(30));
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        assert_eq!(status.phase, crate::upscale::Phase::Ready, "{status:?}");
+        let result = &status.results[0];
+        let media_id = result.media_id.as_deref().unwrap();
+        let source_id = result.source_id.as_deref().unwrap();
+        let mut state = engine.snapshot().unwrap();
+        for source in &mut state.sources {
+            source.enabled = false;
+        }
+        engine.save_state(state).unwrap();
+        let reopened = Engine::new(store).unwrap();
+        let preview = reopened.photo_preview(media_id, source_id).unwrap();
+        assert!(preview.before.is_some());
+        assert_eq!(preview.image.width, 3840);
+        assert!(reopened
+            .snapshot()
+            .unwrap()
+            .sources
+            .iter()
+            .all(|source| !source.enabled));
+        reopened.clear_image_cache().unwrap();
+        assert!(reopened
+            .photo_preview(media_id, source_id)
+            .unwrap()
+            .before
+            .is_some());
+        fs::remove_file(&original_path).unwrap();
+        assert!(
+            reopened
+                .photo_preview(media_id, source_id)
+                .unwrap()
+                .comparison_unavailable
+        );
+        assert!(reopened
+            .photo_preview(&original_path.to_string_lossy(), source_id)
+            .is_err());
+        let collection = PathBuf::from(status.source.as_ref().unwrap().location.clone());
+        reopened.delete_upscale_collection(&collection).unwrap();
+        assert!(!collection.exists());
+        assert!(reopened.photo_preview(media_id, source_id).is_err());
+        assert!(!PathBuf::from(preview.image.url).exists());
+    }
+    #[test]
+    fn cache_trim_pins_both_current_photo_urls() {
+        let temp = tempfile::tempdir().unwrap();
+        let engine =
+            Engine::new(Store::new(temp.path().join("data"), temp.path().join("cache")).unwrap())
+                .unwrap();
+        let result = engine.store.cache.join("result-photo.jpg");
+        let original = engine.store.cache.join("original-photo.jpg");
+        let old = engine.store.cache.join("old-photo.jpg");
+        for path in [&result, &original, &old] {
+            fs::write(path, [0; 16]).unwrap();
+        }
+        engine
+            .trim_cache_excluding(0, &[result.clone(), original.clone()])
+            .unwrap();
+        assert!(result.exists() && original.exists());
+        assert!(!old.exists());
     }
 }

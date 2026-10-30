@@ -20,6 +20,10 @@ object TrustedWebView {
     fun create(context: Context): WebView {
         val loader = WebViewAssetLoader.Builder().addPathHandler("/upscale/", object : WebViewAssetLoader.PathHandler {
             override fun handle(path: String): WebResourceResponse = upscale?.preview(path)?.let { file -> runCatching { WebResourceResponse("image/jpeg", null, file.inputStream()) }.getOrNull() } ?: denied()
+        }).addPathHandler("/photo-preview/", object : WebViewAssetLoader.PathHandler {
+            override fun handle(path: String): WebResourceResponse = PhotoPreviewCache.served(context, path)?.let { file ->
+                runCatching { WebResourceResponse("image/jpeg", null, file.inputStream()) }.getOrNull()
+            } ?: denied()
         }).addPathHandler("/media/", object : WebViewAssetLoader.PathHandler {
             override fun handle(path: String): WebResourceResponse {
                 if (!path.matches(Regex("[a-f0-9]{64}\\.img"))) return denied()

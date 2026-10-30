@@ -9,8 +9,8 @@ import org.json.JSONObject
 
 /** One serial worker; state snapshots are short and never enter updater/store gates. */
 class UpscaleManager(private val environment: Environment) : AutoCloseable {
-    data class Output(val id: String, val name: String, val width: Int, val height: Int, val file: File, val before: File, val after: File, val sourceId: String? = null, val multipleSources: Boolean = false)
-    data class Publication(val source: JSONObject, val revision: Long)
+    data class Output(val id: String, val name: String, val width: Int, val height: Int, val file: File, val before: File, val after: File, val sourceId: String? = null, val multipleSources: Boolean = false, val mediaId: String? = null, val publishedSourceId: String? = null)
+    data class Publication(val source: JSONObject, val revision: Long, val mediaId: String? = null, val sourceId: String? = null)
     class ImageFailure(message: String, cause: Throwable? = null) : Exception(message, cause)
     interface Environment {
         val directory: File
@@ -112,7 +112,7 @@ class UpscaleManager(private val environment: Environment) : AutoCloseable {
                     synchronized(this) {
                         revision = publication.revision; saved = JSONObject(publication.source.toString())
                         completed++; processed++
-                        if (previews.size < 20) { previews += rendered; keepPreviews = true }
+                        if (previews.size < 20) { previews += rendered.copy(mediaId = publication.mediaId, publishedSourceId = publication.sourceId); keepPreviews = true }
                     }
                 } catch (e: ImageFailure) {
                     ensureCurrent(id)
@@ -153,6 +153,7 @@ class UpscaleManager(private val environment: Environment) : AutoCloseable {
         .put("downloadedBytes", 0).put("totalDownloadBytes", 0).put("error", error ?: JSONObject.NULL).put("message", message ?: JSONObject.NULL)
         .put("source", saved?.let { JSONObject(it.toString()) } ?: JSONObject.NULL).put("results", JSONArray().apply {
             previews.forEachIndexed { index, output -> put(JSONObject().put("id", output.id).put("name", output.name).put("width", output.width).put("height", output.height)
+                .apply { output.mediaId?.let { put("mediaId", it) }; output.publishedSourceId?.let { put("sourceId", it) } }
                 .put("originalPreview", "${TrustedWebView.origin}/upscale/$job/$index-before.jpg").put("resultPreview", "${TrustedWebView.origin}/upscale/$job/$index-after.jpg")) }
         })
     fun cancel(jobId: String? = null): JSONObject {

@@ -68,6 +68,20 @@ class UpscaleCollectionsTest {
         assertTrue(result.source.getString("name").contains("Tất cả nguồn • Fast •"))
         assertFalse(result.source.getString("name").contains("Original photos"))
     }
+    @Test fun publishedManifestPersistsOnlyOriginalIdsForComparisonAfterReopening() = withStore { context, store, collections ->
+        val original = imported(context, store, false)
+        val job = UUID.randomUUID().toString(); val rendered = output(context, original.getString("id"))
+        val publication = collections.append(job, rendered, 0, store.revision())
+        val published = collections.media(publication.source).single()
+        assertEquals(published.id, publication.mediaId); assertEquals(published.sourceId, publication.sourceId)
+        assertNotEquals(rendered.id, publication.mediaId)
+        val manifest = JSONObject(File(context.filesDir.canonicalFile, "upscaled/$job/collection.json").readText())
+        val pairing = manifest.getJSONArray("items").getJSONObject(0).getJSONObject("original")
+        assertEquals(rendered.id, pairing.getString("id"))
+        assertEquals(original.getString("id"), pairing.getString("sourceId"))
+        assertEquals(setOf("id", "sourceId"), pairing.keys().asSequence().toSet())
+        assertEquals(1, UpscaleCollections(context, StateStore(context)).storage().getJSONArray("collections").getJSONObject(0).getInt("count"))
+    }
     @Test fun originalSnapshotExcludesBothCurrentAndLegacyGeneratedCollections() = withStore { context, store, collections ->
         val original = imported(context, store, false); imported(context, store, true)
         val saved = collections.append(UUID.randomUUID().toString(), output(context), 0, store.revision()).source
