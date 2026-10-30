@@ -1,3 +1,4 @@
+import { t } from './i18n';
 import { cloneJson } from './compat';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { callNative, errorMessage, isNative } from './native';
@@ -44,7 +45,7 @@ export function useWallta() {
     const timer = setTimeout(() => setNotice(null), notice.error ? 12000 : 4000);
     return () => clearTimeout(timer);
   }, [notice]);
-  const save = async (next: AppState, message = 'Đã lưu thay đổi.') => perform(async () => {
+  const save = async (next: AppState, message = t("Đã lưu thay đổi.")) => perform(async () => {
     setState(normalize(await callNative<AppState>('save_state', { state: next })));
     await refresh(); notify(message);
   });
@@ -53,7 +54,7 @@ export function useWallta() {
     await perform(async () => {
       const result = await saveSourceSelection(state, source, options, callNative, saved => { persisted = true; setState(normalize(saved)); }, setMedia);
       setState(normalize(result.state)); setMedia(result.media);
-      notify(options.apply ? 'Đã áp dụng nguồn ảnh · Tự đổi: Bật.' : source.location ? 'Đã lưu nguồn ảnh.' : 'Đã lưu tài khoản. Chọn thư mục để sử dụng.');
+      notify(options.apply ? t("Đã áp dụng nguồn ảnh · Tự đổi: Bật.") : source.location ? t("Đã lưu nguồn ảnh.") : t("Đã lưu tài khoản. Chọn thư mục để sử dụng."));
     });
     return persisted;
   };
@@ -61,10 +62,10 @@ export function useWallta() {
     const changed = normalize(await callNative<AppState>('next_wallpaper'));
     setState(changed);
     if (changed.error) { notify(changed.error, true); return; }
-    notify(isNative() ? 'Đã cập nhật hình nền.' : 'Đã đổi ảnh trong bản xem trước.');
+    notify(isNative() ? t("Đã cập nhật hình nền.") : t("Đã đổi ảnh trong bản xem trước."));
   }), [perform, notify]);
   const toggle = () => perform(async () => {
-    if (!state.running && !media.length) throw new Error('Thêm ít nhất một nguồn có ảnh trước khi bật tự động.');
+    if (!state.running && !media.length) throw new Error(t("Thêm ít nhất một nguồn có ảnh trước khi bật tự động."));
     setState(normalize(await callNative<AppState>('set_running', { running: !state.running })));
   });
   useEffect(() => {

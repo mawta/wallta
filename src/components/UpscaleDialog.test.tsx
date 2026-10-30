@@ -4,6 +4,7 @@ import { createRoot } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { UpscaleDialog } from './UpscaleDialog';
 import { callNative } from '../lib/native';
+import { localeStore } from '../lib/i18n';
 vi.mock('../lib/native', () => ({ isNative: () => true, callNative: vi.fn(), imageUrl: (s: string) => s, errorMessage: (e: unknown) => String(e) }));
 let host: HTMLDivElement; let root: ReturnType<typeof createRoot>;
 const media = Array.from({length: 75}, (_, i) => ({id: `img${i}`, name: `Image ${i}`, sourceId:'s', url:`/original${i}`}));
@@ -55,6 +56,16 @@ it('shows saved real previews after a partial failure without requiring another 
  expect([...host.querySelectorAll('button')].some(b=>b.textContent?.includes('Lưu ảnh 4K'))).toBe(false);
 });
 it('does not offer AI on Android TV',async()=>{await render({platform:'android-tv'});expect(host.querySelector('option[value="ai"]')?.hasAttribute('disabled')).toBe(true);});
+it('translates Fast mode, model selection and after-preview captions in English',async()=>{
+ localeStore.setPreference('en'); await render();
+ expect(host.querySelector('option[value="fast"]')?.textContent).toBe('Fast');
+ await choose('Upscale mode','ai');
+ expect(host.querySelector('select[aria-label="Upscale model"]')).not.toBeNull();
+ controller.status={...idle,jobId:'job',phase:'ready',completed:1,processed:1,total:1,results:[{id:'img0',name:'Ảnh nhà tôi',width:3840,height:2160,originalPreview:'/before.jpg',resultPreview:'/after.jpg'}]};
+ await act(async()=>root.unmount());root=createRoot(host);await render();
+ expect(host.querySelector('img[alt="After"]')?.getAttribute('src')).toBe('/after.jpg');
+ expect(host.textContent).toContain('After ·');expect(host.textContent).not.toContain('Sau');
+});
 it('excludes managed result sources from All and never submits selections hidden by another source scope',async()=>{
  vi.mocked(callNative).mockImplementation(async command=>command==='upscale_storage'?{cacheBytes:0,collections:[{sourceId:'generated'}]} as never:idle as never);
  await render({initialIds:['img2'],sources:[source,{...source,id:'other',name:'Other'},{...source,id:'generated',name:'Generated'}]});

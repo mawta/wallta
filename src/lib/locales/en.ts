@@ -87,7 +87,7 @@ export const english: Record<string, string> = {
   "Cho phép Wallta cài ứng dụng, rồi tiếp tục.": "Allow Wallta to install apps, then continue.",
   "Dùng bản cài để cập nhật.": "Use the installed app to update.",
   "Cập nhật Wallta": "Update Wallta",
-  "Cập nhật": "Update",
+  "Cập nhật": "Updates",
   "Kiểm tra": "Check",
   "Tải bản mới": "Download update",
   "Tiếp tục cài": "Continue installation",

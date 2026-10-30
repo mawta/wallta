@@ -1,3 +1,4 @@
+import { t, localeTag } from '../lib/i18n';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ChevronLeft, ChevronRight, X } from 'lucide-react';
 import { MediaImage } from './MediaImage';
@@ -29,11 +30,11 @@ export function Slideshow({ media, settings, onClose }: { media: MediaItem[]; se
     window.addEventListener('keydown', key);
     return () => window.removeEventListener('keydown', key);
   }, [next, previous, onClose]);
-  return <div className="slideshow" role="dialog" aria-modal="true" aria-label="Trình chiếu ảnh">
+  return <div className="slideshow" role="dialog" aria-modal="true" aria-label={t("Trình chiếu ảnh")}>
     {settings.blurBackground && <MediaImage item={current} className="slideshow-blur" alt="" />}
     <MediaImage item={current} className="slideshow-image" style={{ objectFit: settings.fit === 'fill' ? 'cover' : settings.fit === 'fit' ? 'contain' : 'fill' }} alt={current?.name || ''} />
-    {settings.showClock && <div className="slideshow-clock">{clock.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}<small>{clock.toLocaleDateString('vi-VN', { weekday: 'long', day: 'numeric', month: 'long' })}</small></div>}
-    <button className="slideshow-close icon-button" aria-label="Thoát trình chiếu" autoFocus onClick={onClose}><X /></button>
-    <div className="slideshow-controls"><button className="icon-button" aria-label="Ảnh trước" onClick={previous}><ChevronLeft /></button><span>{current?.name}</span><button className="icon-button" aria-label="Ảnh tiếp theo" onClick={next}><ChevronRight /></button></div>
+    {settings.showClock && <div className="slideshow-clock">{clock.toLocaleTimeString(localeTag(), { hour: '2-digit', minute: '2-digit' })}<small>{clock.toLocaleDateString(localeTag(), { weekday: 'long', day: 'numeric', month: 'long' })}</small></div>}
+    <button className="slideshow-close icon-button" aria-label={t("Thoát trình chiếu")} autoFocus onClick={onClose}><X /></button>
+    <div className="slideshow-controls"><button className="icon-button" aria-label={t("Ảnh trước")} onClick={previous}><ChevronLeft /></button><span>{current?.name}</span><button className="icon-button" aria-label={t("Ảnh tiếp theo")} onClick={next}><ChevronRight /></button></div>
   </div>;
 }

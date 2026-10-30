@@ -1,3 +1,4 @@
+import { t } from './i18n';
 import { defaultSettings, type MediaItem, type Settings, type Source } from './types';
 
 export function selectNext(items: MediaItem[], current: string | null, order: Settings['order']): MediaItem | null {
@@ -60,7 +61,7 @@ export function clampSettings(settings: Settings, minimum = 1): Settings {
 
 export function parseManifest(data: unknown, base: string, sourceId: string): MediaItem[] {
   const entries: unknown = Array.isArray(data) ? data : data && typeof data === 'object' && 'images' in data ? data.images : undefined;
-  if (!Array.isArray(entries)) throw new Error('Danh sách ảnh cần là mảng URL hoặc đối tượng có thuộc tính images.');
+  if (!Array.isArray(entries)) throw new Error(t("Danh sách ảnh cần là mảng URL hoặc đối tượng có thuộc tính images."));
   const seen = new Set<string>();
   const items: MediaItem[] = [];
   for (const entry of entries.slice(0, 10000)) {
@@ -70,7 +71,7 @@ export function parseManifest(data: unknown, base: string, sourceId: string): Me
       const url = new URL(value.url, base);
       if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password || seen.has(url.href)) continue;
       seen.add(url.href);
-      const name = 'name' in value && typeof value.name === 'string' ? value.name : decodeURIComponent(url.pathname.split('/').pop() || 'Ảnh');
+      const name = 'name' in value && typeof value.name === 'string' ? value.name : decodeURIComponent(url.pathname.split('/').pop() || t("Ảnh"));
       items.push({ id: `${sourceId}:${url.href}`, name, url: url.href, sourceId });
     } catch { /* An invalid entry must not prevent valid images from being listed. */ }
   }
@@ -78,13 +79,13 @@ export function parseManifest(data: unknown, base: string, sourceId: string): Me
 }
 
 export function validateSource(source: Pick<Source, 'kind' | 'location' | 'name'> & Partial<Pick<Source, 'enabled' | 'google'>>): string | null {
-  if (!source.name.trim()) return 'Đặt tên cho nguồn ảnh này.';
+  if (!source.name.trim()) return t("Đặt tên cho nguồn ảnh này.");
   if (source.kind === 'drive' && !source.location.trim() && source.google?.connected && source.enabled === false) return null;
-  if (!source.location.trim()) return source.kind === 'local' ? 'Chọn một thư mục ảnh.' : 'Nhập địa chỉ nguồn ảnh.';
+  if (!source.location.trim()) return source.kind === 'local' ? t("Chọn một thư mục ảnh.") : t("Nhập địa chỉ nguồn ảnh.");
   if (source.kind === 'local' || source.kind === 'drive' || source.kind === 'photos') return null;
   try {
     const url = new URL(source.location);
     if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password) throw new Error();
     return null;
-  } catch { return 'Dùng địa chỉ HTTP/HTTPS hợp lệ, không đặt mật khẩu trong URL.'; }
+  } catch { return t("Dùng địa chỉ HTTP/HTTPS hợp lệ, không đặt mật khẩu trong URL."); }
 }

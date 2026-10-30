@@ -1,3 +1,4 @@
+import { t } from '../lib/i18n';
 import type { ReactNode } from 'react';
 import { Check, FolderOpen, Globe2, HardDrive, Images, Cloud, type LucideIcon } from 'lucide-react';
 import type { SourceKind } from '../lib/types';
@@ -17,4 +18,4 @@ export function SettingRow({ title, description, children }: { title: string; de
 export function SectionTitle({ title, children }: { title: string; children?: ReactNode }) {
   return <div className="section-heading"><div><h2>{title}</h2></div>{children}</div>;
 }
-export const intervalLabel = (seconds: number) => seconds < 60 ? `${seconds} giây` : seconds < 3600 ? `${Math.round(seconds / 60)} phút` : `${Number((seconds / 3600).toFixed(1))} giờ`;
+export const intervalLabel = (seconds: number) => seconds < 60 ? t("{0} giây", { 0: seconds }) : seconds < 3600 ? t("{0} phút", { 0: Math.round(seconds / 60) }) : t("{0} giờ", { 0: Number((seconds / 3600).toFixed(1)) });

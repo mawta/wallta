@@ -1,3 +1,4 @@
+import { t } from './i18n';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { callNative, errorMessage, isNative } from './native';
 import { idleUpscale, upscaleActive, type UpscaleController, type UpscaleModel, type UpscaleRequest, type UpscaleStatus } from './upscale';
@@ -17,7 +18,7 @@ export function useUpscale(enabled:boolean,callbacks:{onApply:(source:Source)=>P
   try{
    await handlers.current.onChanged();
    void loadModels();
-   if(autoApply.current===next.jobId){autoApply.current=null;if(next.phase==='ready'&&next.source){if(!await handlers.current.onApply(next.source)&&alive.current)setError('Đã lưu ảnh. Chưa áp dụng được.');}}
+   if(autoApply.current===next.jobId){autoApply.current=null;if(next.phase==='ready'&&next.source){if(!await handlers.current.onApply(next.source)&&alive.current)setError(t("Đã lưu ảnh. Chưa áp dụng được."));}}
   }catch(e){if(alive.current)setError(errorMessage(e));}finally{finalizing.current=false;if(alive.current)setFinishing(false);}
  },[loadModels]);
  const active=upscaleActive(status);

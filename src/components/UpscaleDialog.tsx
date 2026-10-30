@@ -1,3 +1,4 @@
+import { t } from '../lib/i18n';
 import { useEffect, useRef, useState } from 'react';
 import { X } from 'lucide-react';
 import { callNative, imageUrl, isNative } from '../lib/native';
@@ -18,25 +19,25 @@ export function UpscaleDialog({platform,sources,media,initialIds=[],controller,o
  const originals=sources.filter(source=>source.enabled&&source.id!==status.source?.id&&!managedSources.includes(source.id));
  const available=media.filter(item=>item.sourceId!==status.source?.id&&!managedSources.includes(item.sourceId)&&(!sourceId||item.sourceId===sourceId));
  return <dialog ref={dialog} className="source-dialog upscale-dialog" aria-labelledby="upscale-title" onCancel={event=>{event.preventDefault();onClose();}}>
-  <div className="dialog-heading"><h2 id="upscale-title">Nâng ảnh 4K</h2><button className="icon-button" aria-label="Đóng" onClick={onClose}><X size={20}/></button></div>
-  {active?<p className="muted small">Đang chạy. Tiến trình ở cuối cửa sổ.</p>:showResults&&result?<>
-   {status.results.length>1&&<label className="field">Ảnh kết quả<select value={resultIndex} onChange={event=>setResultIndex(Number(event.target.value))}>{status.results.map((item,index)=><option key={item.id} value={index}>{item.name}</option>)}</select></label>}
-   <div className="upscale-comparison"><figure><img src={imageUrl(result.originalPreview)} alt="Trước"/><figcaption>Trước</figcaption></figure><figure><img src={imageUrl(result.resultPreview)} alt="Sau"/><figcaption>Sau · {result.width} × {result.height}</figcaption></figure></div>
-   <p className="muted small">Đã lưu {status.completed} ảnh{status.failed?` · ${status.failed} ảnh lỗi`:''}{status.source?` · ${status.source.name}`:''}</p>
-   <div className="dialog-footer"><button className="button secondary" onClick={()=>setShowResults(false)}>Chạy bộ khác</button>{status.source&&<button className="button primary" disabled={busy} onClick={()=>void controller.apply()}>Áp dụng</button>}</div>
+  <div className="dialog-heading"><h2 id="upscale-title">{t("Nâng ảnh 4K")}</h2><button className="icon-button" aria-label={t("Đóng")} onClick={onClose}><X size={20}/></button></div>
+  {active?<p className="muted small">{t("Đang chạy. Tiến trình ở cuối cửa sổ.")}</p>:showResults&&result?<>
+   {status.results.length>1&&<label className="field">{t("Ảnh kết quả")}<select value={resultIndex} onChange={event=>setResultIndex(Number(event.target.value))}>{status.results.map((item,index)=><option key={item.id} value={index}>{item.name}</option>)}</select></label>}
+   <div className="upscale-comparison"><figure><img src={imageUrl(result.originalPreview)} alt={t("Trước")}/><figcaption>{t("Trước")}</figcaption></figure><figure><img src={imageUrl(result.resultPreview)} alt={t("Sau")}/><figcaption>{t("Sau ·")} {result.width} {t("×")} {result.height}</figcaption></figure></div>
+   <p className="muted small">{t("Đã lưu")} {status.completed} {t("ảnh")}{status.failed?t(" · {0} ảnh lỗi", { 0: status.failed }):''}{status.source?` · ${status.source.name}`:''}</p>
+   <div className="dialog-footer"><button className="button secondary" onClick={()=>setShowResults(false)}>{t("Chạy bộ khác")}</button>{status.source&&<button className="button primary" disabled={busy} onClick={()=>void controller.apply()}>{t("Áp dụng")}</button>}</div>
   </>:<>
-   <label className="field">Nguồn<select aria-label="Nguồn upscale" value={sourceId} disabled={busy} onChange={event=>{const scope=event.target.value;setSourceId(scope);setSelected(previous=>previous.filter(id=>!scope||media.find(item=>item.id===id)?.sourceId===scope));}}><option value="">Tất cả nguồn đang bật</option>{originals.map(source=><option key={source.id} value={source.id}>{source.name}</option>)}</select></label>
-   <label className="field">Chế độ<select aria-label="Chế độ upscale" value={mode} disabled={busy} onChange={event=>setMode(event.target.value as UpscaleMode)}><option value="fast">Nhanh</option><option value="ai" disabled={platform!=='windows'}>AI</option></select></label>
+   <label className="field">{t("Nguồn")}<select aria-label={t("Nguồn upscale")} value={sourceId} disabled={busy} onChange={event=>{const scope=event.target.value;setSourceId(scope);setSelected(previous=>previous.filter(id=>!scope||media.find(item=>item.id===id)?.sourceId===scope));}}><option value="">{t("Tất cả nguồn đang bật")}</option>{originals.map(source=><option key={source.id} value={source.id}>{source.name}</option>)}</select></label>
+   <label className="field">{t("Chế độ")}<select aria-label={t("Chế độ upscale")} value={mode} disabled={busy} onChange={event=>setMode(event.target.value as UpscaleMode)}><option value="fast">{t("Nhanh")}</option><option value="ai" disabled={platform!=='windows'}>AI</option></select></label>
    {mode==='ai'?<>
-    <label className="field">Model<select aria-label="Model upscale" value={model} disabled={busy||!models.length} onChange={event=>setModel(event.target.value as ModelId)}>{models.map(item=><option key={item.id} value={item.id}>{item.name} · {formatBytes(item.bytes)} · {item.installed?'Đã tải':'Chưa tải'}</option>)}</select></label>
-    {chosen&&<div className="model-details"><span>{chosen.description}</span>{!chosen.installed&&chosen.downloadBytes!==chosen.bytes&&<span>Cần tải thêm {formatBytes(chosen.downloadBytes)}</span>}{!chosen.runtimeInstalled&&<span>Bộ xử lý dùng chung · {formatBytes(chosen.runtimeBytes)}</span>}</div>}
-    <p className="muted small">Bấm chạy để tải model đã chọn. Cần GPU Vulkan.</p>
-   </>:<p className="muted small">Giữ tỷ lệ, tối đa khung 4K. Giữ ảnh gốc.</p>}
-   <details open={initialIds.length>0}><summary>Chọn từng ảnh · {selected.length}/50</summary><div className="lan-selection">{available.map(item=><label className="checkbox-row" key={item.id}><input type="checkbox" checked={selected.includes(item.id)} disabled={busy||(!selected.includes(item.id)&&selected.length>=50)} onChange={event=>setSelected(previous=>event.target.checked?[...previous,item.id]:previous.filter(id=>id!==item.id))}/><span>{item.name}</span></label>)}</div></details>
-   <label className="checkbox-row"><input type="checkbox" checked={apply} disabled={busy} onChange={event=>setApply(event.target.checked)}/>Áp dụng khi xong</label>
-   {!isNative()&&<p className="inline-note">Cần bản cài Wallta.</p>}
-   <div className="dialog-footer"><button className="button secondary" disabled={busy||!isNative()||!selected.length||(mode==='ai'&&!chosen)} onClick={()=>void start(false)}>Chạy ảnh đã chọn</button><button className="button primary" disabled={busy||!isNative()||!originals.length||(mode==='ai'&&!chosen)} onClick={()=>void start(true)}>Chạy tất cả</button></div>
+    <label className="field">Model<select aria-label={t("Model upscale")} value={model} disabled={busy||!models.length} onChange={event=>setModel(event.target.value as ModelId)}>{models.map(item=><option key={item.id} value={item.id}>{item.name} · {formatBytes(item.bytes)} · {item.installed?t("Đã tải"):t("Chưa tải")}</option>)}</select></label>
+    {chosen&&<div className="model-details"><span>{t(chosen.description)}</span>{!chosen.installed&&chosen.downloadBytes!==chosen.bytes&&<span>{t("Cần tải thêm")} {formatBytes(chosen.downloadBytes)}</span>}{!chosen.runtimeInstalled&&<span>{t("Bộ xử lý dùng chung ·")} {formatBytes(chosen.runtimeBytes)}</span>}</div>}
+    <p className="muted small">{t("Bấm chạy để tải model đã chọn. Cần GPU Vulkan.")}</p>
+   </>:<p className="muted small">{t("Giữ tỷ lệ, tối đa khung 4K. Giữ ảnh gốc.")}</p>}
+   <details open={initialIds.length>0}><summary>{t("Chọn từng ảnh ·")} {selected.length}/50</summary><div className="lan-selection">{available.map(item=><label className="checkbox-row" key={item.id}><input type="checkbox" checked={selected.includes(item.id)} disabled={busy||(!selected.includes(item.id)&&selected.length>=50)} onChange={event=>setSelected(previous=>event.target.checked?[...previous,item.id]:previous.filter(id=>id!==item.id))}/><span>{item.name}</span></label>)}</div></details>
+   <label className="checkbox-row"><input type="checkbox" checked={apply} disabled={busy} onChange={event=>setApply(event.target.checked)}/>{t("Áp dụng khi xong")}</label>
+   {!isNative()&&<p className="inline-note">{t("Cần bản cài Wallta.")}</p>}
+   <div className="dialog-footer"><button className="button secondary" disabled={busy||!isNative()||!selected.length||(mode==='ai'&&!chosen)} onClick={()=>void start(false)}>{t("Chạy ảnh đã chọn")}</button><button className="button primary" disabled={busy||!isNative()||!originals.length||(mode==='ai'&&!chosen)} onClick={()=>void start(true)}>{t("Chạy tất cả")}</button></div>
   </>}
-  {(error||status.error)&&<p className="form-error" role="alert">{error||status.error}</p>}
+  {(error||status.error)&&<p className="form-error" role="alert">{t(error || status?.error || '')}</p>}
  </dialog>;
 }
