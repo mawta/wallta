@@ -243,6 +243,10 @@ impl UpscaleManager {
                     } else if let Err(error) = result {
                         state.status.phase = Phase::Error;
                         state.status.error = Some(error);
+                        state.status.failed = state
+                            .status
+                            .processed
+                            .saturating_sub(state.status.completed);
                     } else {
                         state.status.phase = Phase::Ready;
                         state.status.message = Some(
@@ -494,6 +498,7 @@ impl UpscaleManager {
             {
                 let mut state = self.inner.lock().map_err(|e| e.to_string())?;
                 state.status.phase = Phase::Processing;
+                state.status.processed += 1;
                 state.status.message =
                     Some(format!("Processing image {} of {}…", index + 1, ids.len()));
             }
@@ -578,7 +583,6 @@ impl UpscaleManager {
             state.saved = Some(source.clone());
             state.status.source = Some(source.clone());
             state.status.completed += 1;
-            state.status.processed += 1;
             manifest.source_id = Some(source.id);
             // Retain at most twenty preview pairs, regardless of the batch size.
             if state.status.results.len() < MAX_PREVIEWS {
@@ -610,7 +614,6 @@ impl UpscaleManager {
     fn record_failure(&self, error: &str) -> Result<(), String> {
         let mut state = self.inner.lock().map_err(|e| e.to_string())?;
         state.status.failed += 1;
-        state.status.processed += 1;
         state.status.message = Some(error.to_owned());
         Ok(())
     }
@@ -837,6 +840,45 @@ fn prune_results(directory: &Path, budget: u64) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn publication_failure_counts_attempted_image_without_claiming_a_saved_result() {
+        let temp = tempfile::tempdir().unwrap();
+        let engine = Arc::new(
+            Engine::new(
+                crate::storage::Store::new(temp.path().join("data"), temp.path().join("cache"))
+                    .unwrap(),
+            )
+            .unwrap(),
+        );
+        let file = temp.path().join("original.png");
+        fs::write(&file, png_test_image()).unwrap();
+        let source: Source = serde_json::from_value(serde_json::json!({
+            "id":"original", "name":"Original", "kind":"local", "location":temp.path()
+        }))
+        .unwrap();
+        let media = crate::providers::item(file.to_string_lossy().into_owned(), None, &source.id);
+        {
+            let mut runtime = engine.inner.lock().unwrap();
+            for index in 0..100 {
+                let mut source = source.clone();
+                if index != 0 {
+                    source.id = format!("extra-{index}");
+                }
+                runtime.state.sources.push(source);
+            }
+            runtime.media.push(media.clone());
+        }
+        let manager = Arc::new(UpscaleManager::new(engine));
+        manager.start(vec![media.id], UpscaleMode::Fast).unwrap();
+        let status = wait_finished(&manager);
+        assert_eq!(status.phase, Phase::Error);
+        assert_eq!(status.processed, 1);
+        assert_eq!(status.failed, 1);
+        assert_eq!(status.completed, 0);
+        assert!(status.source.is_none());
+        assert!(manager.save(status.job_id.as_deref().unwrap()).is_err());
+    }
 
     #[test]
     fn model_results_have_separate_cache_identity() {

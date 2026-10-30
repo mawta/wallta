@@ -180,7 +180,12 @@ impl Engine {
         if source_id.is_some() && snapshot.state.sources.is_empty() {
             return Err("Select an enabled original source. Managed upscale collections cannot process themselves.".into());
         }
-        let (mut items, errors) = self.list(&snapshot.state, &mut snapshot.persistent, revision);
+        let (mut items, errors) = self.list_excluding(
+            &snapshot.state,
+            &mut snapshot.persistent,
+            revision,
+            std::slice::from_ref(&managed),
+        );
         items.retain(|media| {
             !PathBuf::from(&media.url)
                 .canonicalize()
@@ -230,7 +235,7 @@ impl Engine {
         path: &std::path::Path,
         expected_revision: u64,
     ) -> Result<Source, String> {
-        self.accept_upscale_source_with_revision(path, expected_revision)
+        self.publish_upscale_source(path, expected_revision, false)
             .map(|(source, _)| source)
     }
     pub(crate) fn accept_upscale_source_with_revision(
@@ -238,8 +243,19 @@ impl Engine {
         path: &std::path::Path,
         expected_revision: u64,
     ) -> Result<(Source, u64), String> {
+        self.publish_upscale_source(path, expected_revision, true)
+    }
+    fn publish_upscale_source(
+        &self,
+        path: &std::path::Path,
+        expected_revision: u64,
+        strict: bool,
+    ) -> Result<(Source, u64), String> {
         let mut runtime = self.inner.lock().map_err(|error| error.to_string())?;
         self.mutation_gate.ensure_open()?;
+        if strict && self.revision.load(Ordering::SeqCst) != expected_revision {
+            return Err("Sources changed during processing. Start a new job.".into());
+        }
         let root = self
             .store
             .root
@@ -460,6 +476,15 @@ impl Engine {
         persistent: &mut RuntimeState,
         revision: u64,
     ) -> (Vec<MediaItem>, Vec<String>) {
+        self.list_excluding(state, persistent, revision, &[])
+    }
+    fn list_excluding(
+        &self,
+        state: &AppState,
+        persistent: &mut RuntimeState,
+        revision: u64,
+        excluded: &[PathBuf],
+    ) -> (Vec<MediaItem>, Vec<String>) {
         let mut images = vec![];
         let mut errors = vec![];
         let wifi = !state.settings.wifi_only || wallpaper::wifi_connected();
@@ -476,7 +501,7 @@ impl Engine {
                 ));
                 continue;
             }
-            match providers::list_source(&self.client, source) {
+            match providers::list_source_excluding(&self.client, source, excluded) {
                 Ok(mut items) => {
                     if source.kind != "photos" {
                         persistent.catalogs.insert(
@@ -1275,6 +1300,21 @@ mod lan_engine_tests;
 #[cfg(test)]
 mod upscale_engine_tests {
     use super::*;
+
+    #[test]
+    fn worker_publication_cannot_rebase_an_external_collection_adoption() {
+        let (root, engine, _media) = fixture();
+        let result = result_folder(root.path());
+        let externally_added = engine.accept_upscale_source(&result, 0).unwrap();
+        // Legacy save remains idempotent after adoption; an active worker must stop.
+        assert_eq!(
+            engine.accept_upscale_source(&result, 0).unwrap().id,
+            externally_added.id
+        );
+        assert!(engine
+            .accept_upscale_source_with_revision(&result, 0)
+            .is_err());
+    }
 
     #[test]
     fn all_excludes_owned_images_even_when_recursive_original_source_contains_managed_root() {
