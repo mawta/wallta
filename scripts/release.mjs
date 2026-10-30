@@ -6,7 +6,7 @@ import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 
 export const repository = 'mawta/wallta';
-export const releaseNotes = 'Nâng toàn bộ nguồn ảnh lên 4K, tự lưu từng ảnh và giữ một thanh tiến trình phía dưới. Chọn Photo, Anime hoặc Anime Light; hiển thị dung lượng và chỉ tải model khi chạy. Dọn cache, xem và xóa riêng thư mục ảnh đã upscale. Android/TV dùng chế độ Nhanh; AI chạy local trên Windows.';
+export const releaseNotes = 'English and Vietnamese interface with device-language defaults and a saved language selector in Settings. Bilingual offline help, updates, upscaling and LAN transfer page. English project introduction and installation guide in README. Original photos, source names and connections are preserved.';
 const readJson = async path => JSON.parse(await readFile(path,'utf8'));
 const sha256 = data => createHash('sha256').update(data).digest('hex');
 const requireValue = (value,message) => { if (!value) throw new Error(message); return value; };

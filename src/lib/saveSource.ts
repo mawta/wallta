@@ -1,3 +1,4 @@
+import { t } from './i18n';
 import type { AppState, MediaItem, Source } from './types';
 export interface SaveSourceOptions { apply: boolean; autostart: boolean }
 type Command = (command: string, args?: Record<string, unknown>) => Promise<unknown>;
@@ -13,9 +14,9 @@ export async function saveSourceSelection(state: AppState, source: Source, optio
   const refreshed = await call('get_state') as AppState;
   onSaved(refreshed);
   if (!options.apply) return { state: refreshed, media };
-  if (!media.some(item => item.sourceId === source.id)) throw new Error(`Đã lưu nguồn. ${refreshed.error || 'Thư mục chưa có ảnh khả dụng.'}`);
+  if (!media.some(item => item.sourceId === source.id)) throw new Error(t("Đã lưu nguồn. {0}", { 0: t(refreshed.error || "Thư mục chưa có ảnh khả dụng.") }));
   const applied = await call('next_wallpaper', { sourceId: source.id, startRunning: true }) as AppState;
   onSaved(applied);
-  if (applied.current?.sourceId !== source.id || !applied.running) throw new Error(`Đã lưu nguồn. ${applied.error || 'Chưa áp dụng được ảnh. Thử Đổi ảnh ngay.'}`);
+  if (applied.current?.sourceId !== source.id || !applied.running) throw new Error(t("Đã lưu nguồn. {0}", { 0: t(applied.error || "Chưa áp dụng được ảnh. Thử Đổi ảnh ngay.") }));
   return { state: applied, media };
 }
