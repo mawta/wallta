@@ -33,7 +33,9 @@ class MediaRepository(private val context: Context, private val store: StateStor
             val media = selected[id] ?: error("Selected image is no longer available in an enabled local source")
             LanTransferServer.Export(id, media.name) {
                 synchronized(StateStore.lock) { check(store.revision() == snapshot.second) { "Local sources changed. Start the transfer again." } }
-                if (media.url.startsWith("wallta-import://")) {
+                if (media.url.startsWith("wallta-upscale://")) {
+                    UpscaleCollections(context, store).image(media.url).inputStream()
+                } else if (media.url.startsWith("wallta-import://")) {
                     val slash = media.url.lastIndexOf('/'); val name = media.url.substring(slash + 1)
                     require(name.matches(Regex("[a-f0-9]{64}\\.img")))
                     File(PhotoImporter.directory(context, media.url.substring(0, slash)), name).inputStream()
@@ -50,7 +52,7 @@ class MediaRepository(private val context: Context, private val store: StateStor
         val caps = cm.getNetworkCapabilities(cm.activeNetwork) ?: return false
         return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) && (!settings.optBoolean("wifiOnly") || caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI))
     }
-    fun list(force: Boolean = false): List<Media> {
+    fun list(force: Boolean = false, sourceIds: Set<String>? = null, originalOnly: Boolean = false, strict: Boolean = false): List<Media> {
         // A single generation owns the entire list operation, including later sources.
         val snapshot = synchronized(StateStore.lock) { Triple(store.state(), store.revision(), store.get("cacheEpoch")?.optLong("value") ?: 0L) }
         val state = snapshot.first; val revision = snapshot.second; val epoch = snapshot.third
@@ -66,12 +68,13 @@ class MediaRepository(private val context: Context, private val store: StateStor
         val result = mutableListOf<Media>(); val errors = mutableListOf<String>()
         for (i in 0 until sources.length()) {
             ensureCurrent()
-            val s = sources.getJSONObject(i); if (!s.optBoolean("enabled", true)) continue
+            val s = sources.getJSONObject(i); if (!s.optBoolean("enabled", true) || sourceIds != null && s.optString("id") !in sourceIds || originalOnly && UpscaleCollections(context, store).isManaged(s)) continue
             ensureCurrent(s)
             val id = s.getString("id"); val key = "catalog:$id"; val cached = store.get(key)
             val existing = cached?.optJSONArray("items")?.let { a -> (0 until a.length()).map { Media.from(a.getJSONObject(it)) } } ?: emptyList()
             val online = networkAllowed(settings)
             if (s.getString("kind") != "local" && !online) {
+                check(!strict) { "Network unavailable or Wi-Fi required for this source" }
                 // Photos never enter the offline fallback catalog.
                 if (s.getString("kind") != "photos") result += existing.filter { cacheFile(it.id).exists() }
                 continue
@@ -96,6 +99,7 @@ class MediaRepository(private val context: Context, private val store: StateStor
             } catch (e: Exception) {
                 // An invalidated operation must never continue with its stale later sources.
                 ensureCurrent(s)
+                if (strict) throw e
                 if (s.getString("kind") != "photos") result += existing.filter { cacheFile(it.id).exists() }
                 else if ((e as? ApiError)?.status in listOf(401, 403, 404)) { clearSource(id); store.put(key, null) }
                 errors += "${s.optString("name")}: ${e.message}"
@@ -106,6 +110,7 @@ class MediaRepository(private val context: Context, private val store: StateStor
         return result.distinctBy { it.id }.take(10000)
     }
     private fun local(s: JSONObject): List<Media> {
+        if (s.getString("location").startsWith("wallta-upscale://")) return UpscaleCollections(context, store).media(s)
         if (s.getString("location").startsWith("wallta-import://")) {
             val folder = PhotoImporter.directory(context, s.getString("location")); val saved = store.session("import", s.getString("id"), true) ?: error("Imported photos are no longer available")
             require(saved.optString("location") == s.getString("location")); val a = saved.optJSONArray("items") ?: JSONArray()
@@ -224,7 +229,9 @@ class MediaRepository(private val context: Context, private val store: StateStor
             if (System.currentTimeMillis() - cachedAt > 60 * 60 * 1000) target.delete()
         }
         if (target.exists()) { target.setLastModified(System.currentTimeMillis()); return target }
-        val bytes = if (media.url.startsWith("wallta-import://")) {
+        val bytes = if (media.url.startsWith("wallta-upscale://")) {
+            UpscaleCollections(context, store).image(media.url).inputStream().use { Net.bounded(it, 64 * 1024 * 1024) }
+        } else if (media.url.startsWith("wallta-import://")) {
             val slash = media.url.lastIndexOf('/'); val location = media.url.substring(0, slash); val name = media.url.substring(slash + 1)
             require(name.matches(Regex("[a-f0-9]{64}\\.img")))
             File(PhotoImporter.directory(context, location), name).inputStream().use { Net.bounded(it, 25 * 1024 * 1024) }

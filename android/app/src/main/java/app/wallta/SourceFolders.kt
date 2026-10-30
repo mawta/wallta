@@ -21,7 +21,7 @@ object SourceFolders {
             val entry = folders.getJSONObject(index)
             val location = entry.getString("location").trim()
             require(location.isNotEmpty() && location.length <= 8192) { "Folder location is empty or too long" }
-            require(!location.startsWith("wallta-import://")) { "Imported collections use one managed location" }
+            require(!location.startsWith("wallta-import://") && !location.startsWith("wallta-upscale://")) { "Managed collections use one location" }
             if (entry.has("name")) require(entry.getString("name").length <= 256) { "Folder name is too long" }
             location
         }

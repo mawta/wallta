@@ -8,35 +8,53 @@ import androidx.exifinterface.media.ExifInterface
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
-import java.util.UUID
 
 /** Original input and durable imports are resolved natively; the WebView supplies only media IDs. */
 internal class AndroidUpscaleEnvironment(private val context: Context, private val store: StateStore, private val updater: AndroidUpdater) : UpscaleManager.Environment {
-    override val directory = File(context.cacheDir, "upscale").apply { mkdirs() }
-    override fun revision() = store.revision()
+    override val directory = File(context.cacheDir.canonicalFile, "upscale").apply { mkdirs() }
+    private val requestTag = "wallta-upscale-${java.util.UUID.randomUUID()}"
+    private val collections = UpscaleCollections(context, store)
+    override fun revision() = updater.mutate { store.revision() }
+    override fun snapshot(sourceId: String?): List<Media> {
+        updater.mutate {
+            if (sourceId != null) {
+                val sources = store.state().getJSONArray("sources")
+                require((0 until sources.length()).map { sources.getJSONObject(it) }.any { it.optString("id") == sourceId && it.optBoolean("enabled", true) && !collections.isManaged(it) }) { "Choose an enabled original source" }
+            }
+        }
+        return Net.scoped(requestTag) { MediaRepository(context, store).list(force = true, sourceIds = sourceId?.let { setOf(it) }, originalOnly = true, strict = true) }
+    }
+    override fun storage(): JSONObject = updater.mutate { collections.storage() }
+    override fun clearCache(): JSONObject = updater.mutate { collections.clearCache() }
+    override fun deleteCollection(collectionId: String): JSONObject = updater.mutate { collections.delete(collectionId) }
     override fun resolve(ids: List<String>): List<Media> {
-        val selected = MediaRepository(context, store).list().associateBy { it.id }
+        val selected = Net.scoped(requestTag) { MediaRepository(context, store).list() }.associateBy { it.id }
         return ids.map { selected[it] ?: error("Selected image is no longer available in an enabled source") }
     }
-    override fun input(media: Media) = MediaRepository(context, store).image(media)
+    override fun cancelWork() { Net.cancel(requestTag) }
+    override fun input(media: Media): File = try { Net.scoped(requestTag) { MediaRepository(context, store).image(media) } }
+    catch (e: IllegalArgumentException) {
+        if (e.message?.contains("Invalid or oversized image") == true || e.message == "Response exceeds size limit") throw UpscaleManager.ImageFailure(e.message ?: "Invalid image", e)
+        throw e
+    }
     override fun render(input: File, output: File, before: File, after: File): Pair<Int, Int> {
-        require(input.length() in 1..(25L * 1024 * 1024)) { "Original image exceeds 25 MB" }
+        if (input.length() !in 1..(25L * 1024 * 1024)) throw UpscaleManager.ImageFailure("Original image exceeds 25 MB or is empty")
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeFile(input.path, bounds)
         val orientation = runCatching { ExifInterface(input.path).getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL) }.getOrDefault(ExifInterface.ORIENTATION_NORMAL)
-        val target = if (orientation in 5..8) UpscalePolicy.target(bounds.outHeight, bounds.outWidth) else UpscalePolicy.target(bounds.outWidth, bounds.outHeight)
+        val target = try { if (orientation in 5..8) UpscalePolicy.target(bounds.outHeight, bounds.outWidth) else UpscalePolicy.target(bounds.outWidth, bounds.outHeight) } catch (e: IllegalArgumentException) { throw UpscaleManager.ImageFailure("Invalid or oversized image", e) }
         val digest = java.security.MessageDigest.getInstance("SHA-256")
         input.inputStream().use { stream -> val buffer = ByteArray(65536); while (true) { val n = stream.read(buffer); if (n < 0) break; digest.update(buffer, 0, n) } }
         val key = digest.digest().joinToString("") { "%02x".format(it) } + "-fast-v2"
-        val cache = File(context.cacheDir, "upscale-results").apply { mkdirs() }
+        val cache = UpscaleFiles.root(File(context.cacheDir.canonicalFile, "upscale-results"), true)
         val cachedOutput = File(cache, "$key.img"); val cachedBefore = File(cache, "$key-before.jpg"); val cachedAfter = File(cache, "$key-after.jpg")
-        if (listOf(cachedOutput, cachedBefore, cachedAfter).all { it.isFile && it.length() > 0 }) {
+        if (listOf(cachedOutput, cachedBefore, cachedAfter).all { UpscaleFiles.plain(it, false) && it.length() > 0 }) {
             cachedOutput.copyTo(output); cachedBefore.copyTo(before); cachedAfter.copyTo(after)
             listOf(cachedOutput, cachedBefore, cachedAfter).forEach { it.setLastModified(System.currentTimeMillis()) }
             return target
         }
-        require(output.parentFile!!.usableSpace >= 128L * 1024 * 1024) { "At least 128 MB of free storage is required" }
-        val raw = BitmapFactory.decodeFile(input.path, BitmapFactory.Options().apply { inSampleSize = UpscalePolicy.sampleSize(bounds.outWidth, bounds.outHeight) }) ?: error("Cannot decode original image")
+        check(output.parentFile!!.usableSpace >= 128L * 1024 * 1024) { "At least 128 MB of free storage is required" }
+        val raw = BitmapFactory.decodeFile(input.path, BitmapFactory.Options().apply { inSampleSize = UpscalePolicy.sampleSize(bounds.outWidth, bounds.outHeight) }) ?: throw UpscaleManager.ImageFailure("Cannot decode original image")
         val decoded = try {
             val matrix = Matrix().apply {
                 when (orientation) {
@@ -72,33 +90,6 @@ internal class AndroidUpscaleEnvironment(private val context: Context, private v
             return target
         } finally { scaled?.takeIf { it !== decoded }?.recycle(); decoded.recycle() }
     }
-    override fun publish(jobId: String, outputs: List<UpscaleManager.Output>, revision: Long): JSONObject {
-        val id = UUID.nameUUIDFromBytes("wallta-4k:$jobId".toByteArray()).toString()
-        val location = "wallta-import://${Policy.hash(id)}/$jobId"
-        val folder = PhotoImporter.directory(context, location)
-        val source = JSONObject().put("id", id).put("name", "Ảnh 4K").put("kind", "local").put("location", location).put("recursive", false).put("enabled", true)
-        var committed = false
-        try {
-            check(folder.mkdirs() || folder.isDirectory) { "Cannot create 4K collection" }
-            val items = JSONArray()
-            outputs.forEachIndexed { index, output ->
-                check(!Thread.currentThread().isInterrupted && store.revision() == revision) { "Sources changed. Start processing again." }
-                val name = "${Policy.hash("$jobId:$index")}.img"
-                output.file.copyTo(File(folder, name), overwrite = true)
-                items.put(JSONObject().put("file", name).put("name", output.name))
-            }
-            return updater.mutate { synchronized(StateStore.lock) {
-                val state = store.state()
-                val sources = state.getJSONArray("sources")
-                (0 until sources.length()).map { sources.getJSONObject(it) }.find { it.optString("id") == id }?.let { committed = true; return@mutate JSONObject(it.toString()) }
-                check(store.revision() == revision && !Thread.currentThread().isInterrupted) { "Sources changed. Start processing again." }
-                require(sources.length() < 100) { "Maximum 100 sources" }
-                store.beginPending("import", id, JSONObject().put("phase", "ready").put("location", location).put("items", items))
-                // save() can commit before a later public read fails: retain the originals in that case.
-                sources.put(source); committed = true
-                store.save(state)
-                source
-            } }
-        } finally { if (!committed) folder.deleteRecursively() }
-    }
+    override fun append(jobId: String, output: UpscaleManager.Output, index: Int, revision: Long): UpscaleManager.Publication =
+        updater.mutate { collections.append(jobId, output, index, revision) }
 }

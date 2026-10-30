@@ -26,7 +26,7 @@ class WalltaBridge(private val activity: MainActivity, private val web: WebView)
         val id = request.optString("id"); if (id.length !in 1..128) return
         val command = request.optString("command"); val args = request.optJSONObject("args") ?: JSONObject()
         if (command == "pick_folder") { activity.runOnUiThread { activity.pickFolder { uri, error -> reply(id, error == null, error ?: uri) } }; return }
-        val executor = if (command in listOf("get_state", "save_state", "set_running", "get_capabilities", "google_cancel", "lan_start", "lan_status", "lan_stop", "lan_accept", "update_status", "update_check", "update_download", "update_cancel", "update_install", "upscale_start", "upscale_status", "upscale_cancel")) control else io
+        val executor = if (command in listOf("get_state", "save_state", "set_running", "get_capabilities", "google_cancel", "lan_start", "lan_status", "lan_stop", "lan_accept", "update_status", "update_check", "update_download", "update_cancel", "update_install", "upscale_start", "upscale_start_all", "upscale_status", "upscale_cancel")) control else io
         executor.execute {
             try {
                 val repo = MediaRepository(activity.applicationContext, store)
@@ -43,7 +43,12 @@ class WalltaBridge(private val activity: MainActivity, private val web: WebView)
                     "update_download" -> updater.download()
                     "update_cancel" -> updater.cancel()
                     "update_install" -> updater.install()
-                    "upscale_start" -> updater.mutate { val ids = args.getJSONArray("ids"); upscale.start((0 until ids.length()).map { ids.getString(it) }, args.getString("mode")) }
+                    "upscale_start" -> updater.mutate { val ids = args.getJSONArray("ids"); upscale.start((0 until ids.length()).map { ids.getString(it) }, args.getString("mode"), args.optString("model").takeIf { args.has("model") && !args.isNull("model") }) }
+                    "upscale_start_all" -> updater.mutate { upscale.startAll(args.optString("sourceId").takeIf { args.has("sourceId") && !args.isNull("sourceId") }, args.getString("mode"), args.optString("model").takeIf { args.has("model") && !args.isNull("model") }) }
+                    "upscale_models" -> JSONArray()
+                    "upscale_storage" -> upscale.storage()
+                    "upscale_clear_cache" -> upscale.clearCache()
+                    "upscale_delete_collection" -> upscale.deleteCollection(args.getString("collectionId"))
                     "upscale_status" -> upscale.status()
                     "upscale_cancel" -> upscale.cancel(args.optString("jobId").takeIf { it.isNotBlank() })
                     "upscale_save" -> upscale.save(args.getString("jobId"))
@@ -51,7 +56,7 @@ class WalltaBridge(private val activity: MainActivity, private val web: WebView)
                     "lan_status" -> lan.status()
                     "lan_stop" -> lan.stop()
                     "lan_accept" -> { val state = lan.accept(); WallpaperWorker.schedule(activity); state }
-                    "clear_cache" -> { repo.clear(); JSONObject.NULL }
+                    "clear_cache" -> { upscale.clearCache(); JSONObject.NULL }
                     "google_begin" -> { authorizationIds.add(args.getString("sourceId")); GoogleAmbient(activity, store).begin(args) }
                     "google_poll" -> GoogleAmbient(activity, store).poll(args.getString("sourceId"))
                     "google_disconnect" -> { GoogleAmbient(activity, store).disconnect(args.getString("sourceId")); JSONObject.NULL }

@@ -7,6 +7,20 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class NetRedirectTest {
+    @Test fun oversizedUnauthorizedResponseStillReportsAuthenticationFailure() {
+        val server = ServerSocket(0, 1, java.net.InetAddress.getByName("127.0.0.1"))
+        val worker = kotlin.concurrent.thread(isDaemon = true) {
+            server.accept().use { socket ->
+                val reader = socket.getInputStream().bufferedReader()
+                while (!reader.readLine().isNullOrEmpty()) {}
+                socket.getOutputStream().write("HTTP/1.1 401 Unauthorized\r\nContent-Length: 32\r\nConnection: close\r\n\r\n${"x".repeat(32)}".toByteArray())
+            }
+        }
+        try {
+            val error = assertThrows(ApiError::class.java) { Net.bytes("http://127.0.0.1:${server.localPort}/original", 4) }
+            assertEquals(401, error.status)
+        } finally { server.close(); worker.join(1000) }
+    }
     @Test fun webdavCredentialsStayInsideSelectedRootsOnEveryRedirect() {
         val server = ServerSocket(0, 10, java.net.InetAddress.getByName("127.0.0.1"))
         val received = java.util.concurrent.CopyOnWriteArrayList<Pair<String, String?>>()

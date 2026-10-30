@@ -1,6 +1,10 @@
 package app.wallta
 
 object UpscalePolicy {
+    fun mode(mode: String, model: String? = null) {
+        require(mode == "fast") { if (mode == "ai") "AI 4K is available on Windows. Use Fast on Android/TV." else "Unknown processing mode" }
+        require(model == null) { "AI models are available on Windows only" }
+    }
     fun sampleSize(width: Int, height: Int): Int {
         require(width > 0 && height > 0 && width.toLong() * height <= 120_000_000) { "Invalid or oversized image" }
         var sample = 1
@@ -15,7 +19,7 @@ object UpscalePolicy {
         return maxOf(1, (width * scale).toInt()) to maxOf(1, (height * scale).toInt())
     }
     fun selection(ids: List<String>, mode: String) {
-        require(mode == "fast") { if (mode == "ai") "AI 4K is available on Windows. Use Fast on Android/TV." else "Unknown processing mode" }
+        mode(mode)
         require(ids.size in 1..50 && ids.distinct().size == ids.size && ids.all { it.matches(Regex("[a-f0-9]{64}")) }) { "Select 1–50 unique images" }
     }
 }
