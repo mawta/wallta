@@ -1,0 +1,6 @@
+import {beforeEach,expect,it,vi} from 'vitest';import{applyUpscale}from'./applyUpscale';import{callNative}from'./native';import{emptyState}from'./types';
+vi.mock('./native',()=>({callNative:vi.fn()}));
+const source={id:'saved',name:'4K',kind:'local' as const,location:'managed',enabled:false,recursive:true};
+beforeEach(()=>vi.mocked(callNative).mockReset());
+it('enables the saved collection from fresh native state without losing newer settings',async()=>{vi.mocked(callNative).mockImplementation(async(command)=>command==='get_state'?{...emptyState,sources:[source],settings:{...emptyState.settings,intervalSeconds:1234}} as never:undefined as never);await applyUpscale(source);expect(callNative).toHaveBeenCalledWith('save_state',{state:expect.objectContaining({settings:expect.objectContaining({intervalSeconds:1234}),sources:[{...source,enabled:true}]})});expect(callNative).toHaveBeenCalledWith('next_wallpaper',{sourceId:'saved',startRunning:true});});
+it('does not recreate a collection deleted since completion',async()=>{vi.mocked(callNative).mockResolvedValue({...emptyState,sources:[]} as never);await expect(applyUpscale(source)).rejects.toThrow();expect(callNative).not.toHaveBeenCalledWith('save_state',expect.anything());});

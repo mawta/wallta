@@ -6,101 +6,52 @@ import { UpscaleDialog } from './UpscaleDialog';
 import { callNative } from '../lib/native';
 vi.mock('../lib/native', () => ({ isNative: () => true, callNative: vi.fn(), imageUrl: (s: string) => s, errorMessage: (e: unknown) => String(e) }));
 let host: HTMLDivElement; let root: ReturnType<typeof createRoot>;
-const source = { id: '4k', name: 'Ảnh 4K', kind: 'local' as const, location: 'managed', enabled: true, recursive: false };
-const ready = { jobId: 'job', phase: 'ready', mode: 'ai', completed: 1, total: 1, results: [{ id: 'img', name: 'Beach', width: 3840, height: 2160, originalPreview: '/before.jpg', resultPreview: '/after.jpg' }] };
-const onSaved = vi.fn().mockResolvedValue(true); const onClose = vi.fn();
+const media = Array.from({length: 75}, (_, i) => ({id: `img${i}`, name: `Image ${i}`, sourceId:'s', url:`/original${i}`}));
+const source = {id:'s',name:'Drive photos',kind:'drive' as const,location:'folder',enabled:true,recursive:false};
+const models = [
+ {id:'photo',name:'Ảnh thật',description:'RealESRGAN x4plus',bytes:33540549,installed:true,downloadBytes:0,runtimeBytes:6344112,runtimeInstalled:true},
+ {id:'anime',name:'Anime / Minh họa',description:'RealESRGAN Anime 6B',bytes:8973790,installed:false,downloadBytes:8973790,runtimeBytes:6344112,runtimeInstalled:true},
+];
+const idle = {jobId:null,phase:'idle',mode:'fast',model:null,completed:0,processed:0,failed:0,total:0,downloadedBytes:0,totalDownloadBytes:0,results:[]};
+let controller: any;
+const onClose=vi.fn();
 beforeEach(() => {
-  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
-  HTMLDialogElement.prototype.showModal = function () {}; HTMLDialogElement.prototype.close = function () {};
-  vi.mocked(callNative).mockReset(); onSaved.mockClear(); onClose.mockClear();
-  vi.mocked(callNative).mockImplementation(async command => (command === 'upscale_status' ? { phase: 'idle', jobId: null, results: [] } : command === 'upscale_start' ? ready : command === 'upscale_save' ? source : { ...ready, phase: 'cancelled' }) as never);
-  host = document.createElement('div'); document.body.append(host); root = createRoot(host);
+ Object.assign(globalThis,{IS_REACT_ACT_ENVIRONMENT:true});
+ HTMLDialogElement.prototype.showModal=function(){}; HTMLDialogElement.prototype.close=function(){};
+ vi.mocked(callNative).mockReset().mockResolvedValue(idle as never); onClose.mockClear();
+ controller={status:idle,active:false,busy:false,error:'',models,start:vi.fn().mockResolvedValue(true),loadModels:vi.fn().mockResolvedValue(undefined),cancel:vi.fn(),apply:vi.fn(),dismiss:vi.fn()};
+ host=document.createElement('div');document.body.append(host);root=createRoot(host);
 });
-afterEach(async () => { await act(async () => root.unmount()); host.remove(); });
-const click = async (text: string) => { const button = Array.from(host.querySelectorAll('button')).find(b => b.textContent?.includes(text) || b.getAttribute('aria-label') === text); expect(button).toBeDefined(); await act(async () => button!.click()); };
-it('processes selected IDs in AI mode and saves the native committed source with optional apply', async () => {
-  await act(async () => root.render(<UpscaleDialog platform="windows" media={[{ id: 'img', name: 'Beach', sourceId: 's', url: '/original' }]} initialIds={['img']} onSaved={onSaved} onClose={onClose} />));
-  const select = host.querySelector('select')!;
-  await act(async () => { select.value = 'ai'; select.dispatchEvent(new Event('change', { bubbles: true })); });
-  await click('Tạo ảnh 4K');
-  expect(callNative).toHaveBeenCalledWith('upscale_start', { ids: ['img'], mode: 'ai' });
-  expect(host.querySelector('img[alt="Trước"]')?.getAttribute('src')).toBe('/before.jpg');
-  expect(host.querySelector('img[alt="Sau"]')?.getAttribute('src')).toBe('/after.jpg');
-  await click('Lưu ảnh 4K');
-  expect(callNative).toHaveBeenCalledWith('upscale_save', { jobId: 'job' });
-  expect(onSaved).toHaveBeenCalledWith(source, false);
-  expect(onClose).toHaveBeenCalledOnce();
+afterEach(async()=>{await act(async()=>root.unmount());host.remove();});
+const render=async(props:Record<string,unknown>={})=>{await act(async()=>root.render(<UpscaleDialog {...({platform:'windows',sources:[source],media,controller,onClose,...props} as any)} />));};
+const click=async(text:string)=>{const button=[...host.querySelectorAll('button')].find(b=>b.textContent?.includes(text)||b.getAttribute('aria-label')===text);expect(button).toBeDefined();await act(async()=>button!.click());};
+const choose=async(label:string,value:string)=>{const element=host.querySelector(`[aria-label="${label}"]`) as HTMLSelectElement;expect(element).not.toBeNull();await act(async()=>{element.value=value;element.dispatchEvent(new Event('change',{bubbles:true}));});};
+it('runs all from a source without clipping the source library to fifty IDs',async()=>{
+ await render(); await choose('Nguồn upscale','s');await click('Chạy tất cả');
+ expect(controller.start).toHaveBeenCalledWith({all:true,sourceId:'s',mode:'fast',apply:false});expect(onClose).toHaveBeenCalledOnce();
 });
-it('keeps AI unavailable on Android TV', async () => {
-  await act(async () => root.render(<UpscaleDialog platform="android-tv" media={[]} onSaved={onSaved} onClose={onClose} />));
-  expect(host.querySelector('option[value="ai"]')?.hasAttribute('disabled')).toBe(true);
-  expect(host.textContent).toContain('AI chỉ có trên Windows');
+it('passes only the selected model and displays its size and download state',async()=>{
+ await render(); await choose('Chế độ upscale','ai'); await choose('Model upscale','anime');
+ expect(host.textContent).toContain('8.97 MB');expect(host.textContent).toContain('Chưa tải');
+ expect(controller.start).not.toHaveBeenCalled();await click('Chạy tất cả');
+ expect(controller.start).toHaveBeenCalledWith({all:true,sourceId:null,mode:'ai',model:'anime',apply:false});
 });
-it('can preview and save completed images after a later image fails', async () => {
-  const partial = { ...ready, phase: 'error', total: 3, error: 'AI processing exceeded the 10 minute image limit.' };
-  vi.mocked(callNative).mockImplementation(async command => (command === 'upscale_status' ? partial : source) as never);
-  await act(async () => root.render(<UpscaleDialog platform="windows" media={[]} onSaved={onSaved} onClose={onClose} />));
-  expect(host.querySelector('img[alt="Sau"]')?.getAttribute('src')).toBe('/after.jpg');
-  expect(host.textContent).toContain('1/3 ảnh');
-  expect(host.textContent).toContain(partial.error);
-  await click('Lưu ảnh 4K');
-  expect(callNative).toHaveBeenCalledWith('upscale_save', { jobId: 'job' });
-  expect(onSaved).toHaveBeenCalledWith(source, false);
+it('shows separate shared-runtime bytes if they are still needed',async()=>{
+ controller.models=models.map(m=>({...m,runtimeInstalled:false}));await render();await choose('Chế độ upscale','ai');
+ expect(host.textContent).toContain('Bộ xử lý');expect(host.textContent).toContain('6.34 MB');
 });
-it('does not offer saving when an error has no completed images', async () => {
-  vi.mocked(callNative).mockResolvedValue({ ...ready, phase: 'error', completed: 0, results: [], error: 'AI failed' } as never);
-  await act(async () => root.render(<UpscaleDialog platform="windows" media={[]} onSaved={onSaved} onClose={onClose} />));
-  expect(Array.from(host.querySelectorAll('button')).some(button => button.textContent?.includes('Lưu ảnh 4K'))).toBe(false);
-  expect(host.textContent).toContain('AI failed');
+it('closing configuration keeps the job running and the dialog contains no duplicate progress',async()=>{
+ controller.status={...idle,jobId:'job',phase:'processing',total:75};controller.active=true;
+ await render();expect(host.querySelectorAll('progress')).toHaveLength(0);await click('Đóng');
+ expect(controller.cancel).not.toHaveBeenCalled();expect(onClose).toHaveBeenCalledOnce();
 });
-it('cancels the active native job when closing without saving', async () => {
-  vi.mocked(callNative).mockImplementation(async command => (command === 'upscale_status' ? { ...ready, phase: 'processing', results: [] } : { ...ready, phase: 'cancelled', results: [] }) as never);
-  await act(async () => root.render(<UpscaleDialog platform="windows" media={[]} onSaved={onSaved} onClose={onClose} />));
-  await click('Đóng');
-  expect(callNative).toHaveBeenCalledWith('upscale_cancel', { jobId: 'job' });
-  expect(onClose).toHaveBeenCalledOnce();
+it('keeps manual image selection and sends selected IDs rather than All',async()=>{
+ await render({initialIds:['img2']});await click('Chạy ảnh đã chọn');
+ expect(controller.start).toHaveBeenCalledWith({ids:['img2'],mode:'fast',apply:false});
 });
-it('cleans up a native status response that arrives after unmount', async () => {
-  let resolveStatus!: (value: unknown) => void;
-  vi.mocked(callNative).mockImplementation(command => command === 'upscale_status' ? new Promise(resolve => { resolveStatus = resolve; }) as never : Promise.resolve({ ...ready, phase: 'cancelled' }) as never);
-  await act(async () => root.render(<UpscaleDialog platform="windows" media={[]} onSaved={onSaved} onClose={onClose} />));
-  await act(async () => root.render(null));
-  await act(async () => resolveStatus(ready));
-  expect(callNative).toHaveBeenCalledWith('upscale_cancel', { jobId: 'job' });
+it('shows saved real previews after a partial failure without requiring another save',async()=>{
+ controller.status={...idle,jobId:'job',phase:'error',completed:1,processed:2,total:3,failed:1,source:{...source,id:'result'},error:'Image failed',results:[{id:'img0',name:'Image',width:3840,height:2160,originalPreview:'/before.jpg',resultPreview:'/after.jpg'}]};
+ await render();expect(host.querySelector('img[alt="Sau"]')?.getAttribute('src')).toBe('/after.jpg');expect(host.textContent).toContain('Đã lưu');
+ expect([...host.querySelectorAll('button')].some(b=>b.textContent?.includes('Lưu ảnh 4K'))).toBe(false);
 });
-it('polls the native job then passes the apply choice when saving', async () => {
-  vi.useFakeTimers();
-  try {
-    vi.mocked(callNative).mockImplementation(async command => (command === 'upscale_status' ? (vi.mocked(callNative).mock.calls.filter(([name]) => name === 'upscale_status').length === 1 ? { ...ready, phase: 'processing', completed: 0, results: [] } : ready) : source) as never);
-    await act(async () => root.render(<UpscaleDialog platform="windows" media={[]} onSaved={onSaved} onClose={onClose} />));
-    expect(host.querySelector('progress')).not.toBeNull();
-    await act(async () => vi.advanceTimersByTimeAsync(750));
-    expect(host.querySelector('img[alt="Sau"]')).not.toBeNull();
-    await act(async () => (host.querySelector('input[type="checkbox"]') as HTMLInputElement).click());
-    await click('Lưu ảnh 4K');
-    expect(onSaved).toHaveBeenLastCalledWith(source, true);
-  } finally { vi.useRealTimers(); }
-});
-it('can start another image when the native service restores a previously saved ready job', async () => {
-  vi.mocked(callNative).mockImplementation(async command => (command === 'upscale_start' ? { ...ready, jobId: 'second' } : ready) as never);
-  await act(async () => root.render(<UpscaleDialog platform="windows" media={[{ id: 'other', name: 'Other', sourceId: 's', url: '/other' }]} initialIds={['other']} onSaved={onSaved} onClose={onClose} />));
-  await click('Tạo bộ ảnh khác');
-  await click('Tạo ảnh 4K');
-  expect(callNative).toHaveBeenCalledWith('upscale_start', { ids: ['other'], mode: 'fast' });
-});
-it('recovers polling after consecutive identical transient failures', async () => {
-  vi.useFakeTimers();
-  try {
-    let calls = 0;
-    vi.mocked(callNative).mockImplementation(async command => {
-      if (command !== 'upscale_status') return ready as never;
-      calls++;
-      if (calls === 2 || calls === 3) throw new Error('Temporary disconnect');
-      return (calls === 1 ? { ...ready, phase: 'processing', completed: 0, results: [] } : ready) as never;
-    });
-    await act(async () => root.render(<UpscaleDialog platform="windows" media={[]} onSaved={onSaved} onClose={onClose} />));
-    for (let index = 0; index < 3; index++) await act(async () => vi.advanceTimersByTimeAsync(750));
-    expect(calls).toBe(4);
-    expect(host.querySelector('img[alt="Sau"]')).not.toBeNull();
-  } finally { vi.useRealTimers(); }
-});
+it('does not offer AI on Android TV',async()=>{await render({platform:'android-tv'});expect(host.querySelector('option[value="ai"]')?.hasAttribute('disabled')).toBe(true);});

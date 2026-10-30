@@ -9,6 +9,9 @@ import { SourceDialog, type SourceSaveOptions } from './components/SourceDialog'
 import { LanTransfer } from './components/LanTransfer';
 import { MediaImage } from './components/MediaImage';
 import { UpscaleDialog } from './components/UpscaleDialog';
+import { UpscaleProgress } from './components/UpscaleProgress';
+import { useUpscale } from './lib/useUpscale';
+import { applyUpscale } from './lib/applyUpscale';
 import { sourceFolders, supportsFolders } from './lib/folders';
 import { Slideshow } from './components/Slideshow';
 import { Schedule } from './pages/Schedule';
@@ -21,6 +24,11 @@ export default function App() {
   const wallta = useWallta();
   const { state, capabilities, media, busy: operationBusy, loaded, notice, save, next, toggle, refresh, perform, notify } = wallta;
   const updates = useUpdates(loaded);
+  const upscaleController = useUpscale(loaded, { onChanged: refresh, onApply: async source => {
+    const applied = await perform(async () => { await applyUpscale(source); });
+    if (applied) { await refresh(); notify('Đã áp dụng ảnh 4K.'); }
+    return Boolean(applied);
+  } });
   const busy = operationBusy || updates.status.phase === 'installing';
   const [page, setPage] = useState<Page>('overview');
   const [dialog, setDialog] = useState<{ initial?: Source; kind?: SourceKind; choose?: boolean } | null>(null);
@@ -45,7 +53,7 @@ export default function App() {
     <div className="source-card-menu"><button className="icon-button" aria-label={`Tùy chọn ${source.name}`} aria-expanded={menu === source.id} onClick={() => setMenu(menu === source.id ? null : source.id)}><Ellipsis size={20} /></button>{menu === source.id && <div className="dropdown-menu"><button onClick={() => { setDialog({ initial: source }); setMenu(null); }}><Pencil size={14} />Chỉnh sửa</button><button className="danger-text" onClick={() => { setDeleting(source); setMenu(null); }}><Trash2 size={14} />Xóa nguồn</button></div>}</div>
     <div className="source-card-bottom"><span className={`source-status ${source.enabled ? 'enabled' : ''}`}><i />{!source.location ? source.google?.connected ? 'Đã kết nối · Chưa chọn thư mục' : 'Chưa chọn thư mục' : source.id === state.current?.sourceId ? 'Đang hiển thị' : source.enabled ? 'Đã bật' : 'Đã tắt'}</span><Toggle checked={source.enabled} label={`Bật nguồn ${source.name}`} disabled={busy || !source.location} onChange={() => void save({ ...state, sources: state.sources.map(item => item.id === source.id ? { ...item, enabled: !item.enabled } : item) })} /></div>
   </article>);
-  return <div className="app-shell">
+  return <div className={`app-shell ${upscaleController.status.jobId ? 'has-upscale-bar' : ''}`}>
     <aside className="sidebar">
       <a className="brand" href="#" onClick={event => { event.preventDefault(); setPage('overview'); }} aria-label="Wallta - Tổng quan"><img src="./wallta.svg" alt="" /><span>wallta<span className="brand-dot">.</span></span></a>
       <nav aria-label="Điều hướng chính">{nav.map(({ page: value, label, Icon }) => <button key={value} className={`nav-item ${page === value ? 'active' : ''}`} onClick={() => setPage(value)} aria-label={label} aria-current={page === value ? 'page' : undefined}><Icon size={19} strokeWidth={1.6} /><span>{label}</span>{value === 'settings' && ['available', 'ready', 'permissionRequired'].includes(updates.status.phase) && <i className="update-dot" aria-label="Có bản cập nhật" />}{value === 'sources' && state.sources.length > 0 && <span className="nav-count">{state.sources.length}</span>}</button>)}</nav>
@@ -69,18 +77,14 @@ export default function App() {
         </>}
         {page === 'sources' && <><SectionTitle title="Nguồn ảnh"><div className="section-actions"><button className="button secondary" disabled={busy || !media.length} onClick={() => setUpscale([])}><Expand size={16} />Nâng ảnh 4K</button><button className="button secondary" onClick={() => setTransfer(true)}><ArrowUpRight size={16} />Gửi / nhận qua Wi-Fi</button><button className="button primary" onClick={() => add()}><Plus size={18} />Thêm nguồn ảnh</button></div></SectionTitle><div className="source-type-strip">{(['local','drive','manifest','photos'] as SourceKind[]).map(kind => <button key={kind} onClick={() => add(kind)}><SourceIcon kind={kind} size={22} /><div><strong>{sourceLabels[kind]}</strong><small>{kind === 'local' ? 'Máy / USB' : kind === 'drive' ? 'Thư mục Drive' : kind === 'photos' ? 'Nhập ảnh / album TV' : 'JSON, WebDAV & link ảnh'}</small></div><Plus size={16} /></button>)}</div><div className="subsection-heading"><div><h3>Nguồn đã thêm <span className="count-badge">{state.sources.length}</span></h3><p>{enabledSources.length} nguồn đang bật · {media.length} ảnh khả dụng</p></div><button className="button secondary" disabled={busy} onClick={() => void refresh()}><RefreshCw size={15} />Làm mới</button></div>{state.sources.length ? <div className="source-grid full">{sourceCards()}<button className="add-source-card" onClick={() => add()}><span><Plus size={21} /></span><strong>Thêm nguồn ảnh</strong></button></div> : <div className="panel empty-library"><span className="empty-icon"><ImagePlus size={34} strokeWidth={1.2} /></span><h3>Chưa có nguồn ảnh</h3><p>Chọn thư mục hoặc thêm nguồn online.</p><button className="button primary" onClick={() => add()}><Plus size={17} />Thêm nguồn ảnh</button></div>}{state.error && <div className="source-error"><AlertCircle size={18} /><p>{state.error}</p></div>}{media.length > 0 && <><div className="subsection-heading"><div><h3>Ảnh</h3><p>{media.length} ảnh từ các nguồn đang bật</p></div><button className="text-button" onClick={() => setSlideshow(true)}>Trình chiếu <ArrowUpRight size={15} /></button></div><div className="media-grid">{media.slice(0, 24).map(item => <div className="media-tile" key={item.id}><MediaImage item={item} loading="lazy" alt={item.name} /><span>{item.name}</span><button className="media-upscale" aria-label={`Nâng 4K ${item.name}`} disabled={busy} onClick={() => setUpscale([item.id])}>4K</button></div>)}</div></>}</>}
         {page === 'schedule' && <Schedule settings={state.settings} capabilities={capabilities} busy={busy} onSave={settings => save({ ...state, settings })} />}
-        {page === 'settings' && <SettingsPage state={state} capabilities={capabilities} busy={busy} onSave={save} perform={perform} notify={notify} updates={updates} onManageSource={source => setDialog({ initial: source })} />}
+        {page === 'settings' && <SettingsPage state={state} capabilities={capabilities} busy={busy} onSave={save} perform={perform} notify={notify} updates={updates} upscaleActive={upscaleController.active || upscaleController.busy} onStorageChanged={refresh} onManageSource={source => setDialog({ initial: source })} />}
         </>}
       </main>
     </div>
     {notice && <div className={`toast ${notice.error ? 'error' : ''}`} role={notice.error ? 'alert' : 'status'}>{notice.error ? <AlertCircle size={18} /> : <Check size={18} />}<span>{notice.text}</span><button aria-label="Đóng thông báo" className="icon-button" onClick={() => notify('')}><X size={16} /></button></div>}
     {dialog && <SourceDialog key={dialog.initial?.id || `new-${dialog.kind}`} savedSources={state.sources} onOpenSaved={source => setDialog({ initial: source })} initial={dialog.initial} initialKind={dialog.kind} chooseFolderOnOpen={dialog.choose} busy={busy} onClose={() => setDialog(null)} onSave={saveSource} />}
-    {upscale && <UpscaleDialog platform={platform} media={media} initialIds={upscale} onClose={() => setUpscale(null)} onSaved={async (source, apply) => {
-      const applied = !apply || await perform(async () => { await callNative('next_wallpaper', { sourceId: source.id, startRunning: true }); });
-      const refreshed = await refresh();
-      if (applied && refreshed) notify(apply ? 'Đã lưu và áp dụng ảnh 4K.' : 'Đã thêm nguồn Ảnh 4K.');
-      return Boolean(applied && refreshed);
-    }} />}
+    {upscale && <UpscaleDialog platform={platform} sources={state.sources} media={media} initialIds={upscale} controller={upscaleController} onClose={() => setUpscale(null)} />}
+    <UpscaleProgress controller={upscaleController} onResults={() => setUpscale([])} />
     {transfer && <LanTransfer sources={state.sources} media={media} onClose={() => setTransfer(false)} onReceived={async () => { await refresh(); notify('Đã thêm ảnh nhận qua Wi-Fi.'); }} />}
     {deleting && <div className="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="delete-title"><div className="confirm-dialog"><div className="source-icon"><Trash2 size={24} /></div><h2 id="delete-title">Ngắt nguồn ảnh này?</h2><p>Wallta sẽ ngừng dùng “{deleting.name}”. Ảnh gốc của bạn vẫn được giữ nguyên.</p><div className="dialog-footer"><button autoFocus className="button secondary" onClick={() => setDeleting(null)}>Giữ lại</button><button disabled={busy} className="button danger" onClick={() => { void save({ ...state, sources: state.sources.filter(source => source.id !== deleting.id) }).then(saved => { if (saved) setDeleting(null); }); }}>Ngắt nguồn ảnh</button></div></div></div>}
     {slideshow && media.length > 0 && <Slideshow media={media} settings={state.settings} onClose={() => setSlideshow(false)} />}

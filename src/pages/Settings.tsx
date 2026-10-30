@@ -1,12 +1,13 @@
-import { ArrowUpRight, HardDrive, Monitor, ShieldCheck, Trash2, Info, Play } from 'lucide-react';
+import { ArrowUpRight, HardDrive, Monitor, ShieldCheck, Info, Play } from 'lucide-react';
 import { callNative, isNative } from '../lib/native';
 import { SectionTitle, SettingRow, Toggle } from '../components/ui';
 import type { AppState, Capabilities, Source } from '../lib/types';
 import type { UpdatesController } from '../lib/updates';
 import { AppUpdates } from '../components/AppUpdates';
 import { SavedGoogleConnections } from '../components/SavedGoogleConnections';
+import { UpscaleStorage } from '../components/UpscaleStorage';
 
-export function SettingsPage({ state, capabilities, onSave, busy, perform, notify, updates, onManageSource }: { state: AppState; capabilities: Capabilities | null; onSave: (state: AppState) => Promise<unknown>; busy: boolean; perform: (fn: () => Promise<void>) => Promise<unknown>; notify: (text: string, error?: boolean) => void; updates: UpdatesController; onManageSource: (source: Source) => void }) {
+export function SettingsPage({ state, capabilities, onSave, busy, perform, updates, onManageSource, upscaleActive, onStorageChanged }: { state: AppState; capabilities: Capabilities | null; onSave: (state: AppState) => Promise<unknown>; busy: boolean; perform: (fn: () => Promise<void>) => Promise<unknown>; notify: (text: string, error?: boolean) => void; updates: UpdatesController; onManageSource: (source: Source) => void; upscaleActive: boolean; onStorageChanged: () => unknown }) {
   const update = (settings: Partial<AppState['settings']>) => void onSave({ ...state, settings: { ...state.settings, ...settings } });
   return <>
     <SectionTitle title="Cài đặt" />
@@ -19,7 +20,7 @@ export function SettingsPage({ state, capabilities, onSave, busy, perform, notif
     </section>
     <section className="panel settings-panel"><h3><HardDrive size={18} /> Lưu trữ</h3>
       <SettingRow title="Giới hạn cache"><select aria-label="Giới hạn bộ nhớ cache" value={state.settings.cacheLimitMb} onChange={event => update({ cacheLimitMb: Number(event.target.value) })} disabled={busy}>{[64,128,256,512,1024,2048].map(value => <option key={value} value={value}>{value >= 1024 ? `${value / 1024} GB` : `${value} MB`}</option>)}</select></SettingRow>
-      <SettingRow title="Dọn ảnh đã tải" description="Giữ ảnh gốc; tải lại cache khi cần."><button className="button secondary" disabled={busy || !isNative()} onClick={() => void perform(async () => { await callNative('clear_cache'); notify('Đã dọn ảnh trong bộ nhớ đệm.'); })}><Trash2 size={15} />Dọn bộ nhớ</button></SettingRow>
+      <UpscaleStorage active={busy || upscaleActive} onChanged={onStorageChanged} />
     </section>
     <section className="panel settings-panel"><h3><ShieldCheck size={18} /> Khả năng thiết bị</h3><div className="capability-grid"><div><span className="muted">Nền tảng</span><strong>{capabilities?.platform === 'browser' ? 'Trình duyệt · Xem trước' : capabilities?.platform || 'Đang kiểm tra…'}</strong></div><div><span className="muted">Hình nền hệ thống</span><strong>{capabilities?.wallpaper ? 'API khả dụng' : 'Không khả dụng'}</strong></div><div><span className="muted">Screensaver</span><strong>{capabilities?.screensaver ? 'Khả dụng' : 'Không khả dụng'}</strong></div></div>{capabilities?.notes.map(note => <p className="capability-note" key={note}><Info size={15} /><span>{note}</span></p>)}{capabilities?.platform === 'android-tv' && <p className="capability-note"><Info size={15} /><span>Nền Home tùy launcher. Áp dụng thử rồi về Home để kiểm tra.</span></p>}</section>
     <div className="about-panel"><img src="./wallta.svg" alt="" /><div><strong>Wallta <span>{updates.status.currentVersion}</span></strong></div><button className="icon-button" aria-label="Mở kho mã Wallta" onClick={() => void perform(async () => {
