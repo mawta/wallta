@@ -40,8 +40,13 @@ object Net {
                     if (next.host != response.request.url.host || next.port != response.request.url.port) auth = emptyMap()
                     target = next.toString()
                 } else {
+                    if (!response.isSuccessful) {
+                        // Error bodies must not turn authentication failures into a skippable
+                        // oversized-image error. Keep the HTTP status even if the body is invalid.
+                        val payload = runCatching { JSONObject(String(bounded(response.body?.byteStream() ?: error("Empty response"), minOf(limit, 65536)))) }.getOrDefault(JSONObject())
+                        throw ApiError(response.code, payload)
+                    }
                     val bytes = bounded(response.body?.byteStream() ?: error("Empty response"), limit)
-                    if (!response.isSuccessful) throw ApiError(response.code, runCatching { JSONObject(String(bytes)) }.getOrDefault(JSONObject()))
                     return bytes
                 }
             }

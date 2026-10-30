@@ -1,10 +1,11 @@
 //! Pinned local Real-ESRGAN runtime; no image is sent over the network.
-use super::{decode_limited, jpeg, policy, read_bounded, storage, MAX_OUTPUT};
+use super::{decode_limited, jpeg, policy, read_bounded, MAX_OUTPUT};
 use image::{imageops::FilterType, DynamicImage};
+use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::{
     fs,
-    io::{Cursor, Read, Write},
+    io::Write,
     path::{Path, PathBuf},
     sync::atomic::{AtomicBool, Ordering},
     time::{Duration, Instant},
@@ -13,109 +14,346 @@ use std::{
 #[cfg(windows)]
 #[path = "upscale_child.rs"]
 mod child;
+#[path = "upscale_models.rs"]
+mod models;
 
-const ARCHIVE_URL: &str = "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesrgan-ncnn-vulkan-20220424-windows.zip";
+const ASSET_BASE: &str = "https://github.com/mawta/wallta/releases/download/ai-models-v1";
+// Retained as the provenance of the exact official files pinned in models.
+#[cfg(test)]
 pub(super) const ARCHIVE_SHA256: &str =
     "abc02804e17982a3be33675e4d471e91ea374e65b70167abc09e31acb412802d";
-const MAX_ARCHIVE: u64 = 100 * 1024 * 1024;
-const FILES: [(&str, &str); 4] = [
-    (
-        "realesrgan-ncnn-vulkan.exe",
-        "07e49f7cbb4ede01ae4dd4c399d3a7e5846e3d2085c3128eff881e55cb7b1a0c",
-    ),
-    (
-        "vcomp140.dll",
-        "8f72ef2e483465444b2059fc6744d6cb22cd8d8a27f6fa56befd2a42dcd0f78b",
-    ),
-    (
-        "models/realesrgan-x4plus.bin",
-        "713ee713b0353afaa27976f0563a64a5043bd70b9bd8936c2e26e25ebcdbcddf",
-    ),
-    (
-        "models/realesrgan-x4plus.param",
-        "35330ececcea33b6c397a72548e788d5d53becee4734c50b7fada36e89f10a86",
-    ),
-];
+const INSTALL_DIRECTORY: &str = "realesrgan-20220424-x4plus";
+
+#[derive(Debug)]
+pub(super) enum ProcessFailure {
+    Item(String),
+    Fatal(String),
+}
+impl From<String> for ProcessFailure {
+    fn from(error: String) -> Self {
+        Self::Fatal(error)
+    }
+}
+impl From<&str> for ProcessFailure {
+    fn from(error: &str) -> Self {
+        Self::Fatal(error.into())
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelInfo {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub bytes: u64,
+    pub installed: bool,
+    pub download_bytes: u64,
+    pub runtime_bytes: u64,
+    pub runtime_installed: bool,
+}
+
+pub(super) fn parse_model(id: Option<&str>) -> Result<&'static str, String> {
+    Ok(models::selected(id)?.id)
+}
 
 pub(super) fn verify_hash(bytes: &[u8], expected: &str) -> Result<(), String> {
-    let actual = format!("{:x}", Sha256::digest(bytes));
-    if actual != expected {
-        return Err("AI runtime integrity check failed. Remove the runtime and retry.".into());
+    if format!("{:x}", Sha256::digest(bytes)) != expected {
+        return Err(
+            "AI runtime integrity check failed. Retry to repair the selected files.".into(),
+        );
     }
     Ok(())
 }
 
-fn verify_install(directory: &Path) -> Result<(), String> {
-    for (name, expected) in FILES {
-        let file = directory.join(name);
-        if fs::symlink_metadata(&file)
-            .map_err(|e| e.to_string())?
-            .file_type()
-            .is_symlink()
-        {
-            return Err("AI runtime contains a symbolic link.".into());
+fn plain_path(path: &Path, directory: bool) -> bool {
+    let Ok(metadata) = fs::symlink_metadata(path) else {
+        return false;
+    };
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        if metadata.file_attributes() & 0x400 != 0 {
+            return false;
         }
-        verify_hash(&read_bounded(&file, 40 * 1024 * 1024)?, expected)?;
+    }
+    !metadata.file_type().is_symlink()
+        && if directory {
+            metadata.is_dir()
+        } else {
+            metadata.is_file()
+        }
+}
+
+fn runtime_directory(root: &Path, create: bool) -> Result<PathBuf, String> {
+    if !plain_path(root, true) {
+        return Err("Managed AI storage is unavailable or contains a link.".into());
+    }
+    let root = root.canonicalize().map_err(|e| e.to_string())?;
+    let mut directory = root.clone();
+    for component in ["ai-runtime", INSTALL_DIRECTORY, "models"] {
+        let next = directory.join(component);
+        if create
+            && fs::symlink_metadata(&next).is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound)
+        {
+            fs::create_dir(&next).map_err(|e| e.to_string())?;
+        }
+        if !plain_path(&next, true) {
+            return Err("Managed AI storage is unavailable or contains a link.".into());
+        }
+        let canonical = next.canonicalize().map_err(|e| e.to_string())?;
+        if canonical.parent() != Some(directory.as_path()) || !canonical.starts_with(&root) {
+            return Err("AI storage escaped its managed directory.".into());
+        }
+        directory = canonical;
+    }
+    Ok(directory
+        .parent()
+        .ok_or("Invalid AI storage directory.")?
+        .to_path_buf())
+}
+
+fn asset_installed(directory: &Path, asset: &models::Asset) -> bool {
+    if !plain_path(directory, true) || !plain_path(&directory.join("models"), true) {
+        return false;
+    }
+    let file = directory.join(asset.path);
+    if !plain_path(&file, false) || !fs::metadata(&file).is_ok_and(|m| m.len() == asset.bytes) {
+        return false;
+    }
+    read_bounded(&file, asset.bytes)
+        .and_then(|bytes| verify_hash(&bytes, asset.sha256))
+        .is_ok()
+}
+
+fn verify_install(directory: &Path, model: &models::Model) -> Result<(), String> {
+    if models::RUNTIME
+        .iter()
+        .chain(model.files)
+        .any(|asset| !asset_installed(directory, asset))
+    {
+        return Err(
+            "AI runtime or selected model is missing or failed its integrity check.".into(),
+        );
     }
     Ok(())
 }
 
+/// Reading metadata never creates directories, downloads, or trusts file presence alone.
+pub(super) fn catalog(root: &Path) -> Vec<ModelInfo> {
+    let directory = runtime_directory(root, false).ok();
+    let installed = |asset: &models::Asset| {
+        directory
+            .as_ref()
+            .is_some_and(|d| asset_installed(d, asset))
+    };
+    let runtime_bytes = models::RUNTIME.iter().map(|a| a.bytes).sum();
+    let runtime_installed = models::RUNTIME.iter().all(&installed);
+    models::MODELS
+        .iter()
+        .map(|model| ModelInfo {
+            id: model.id.into(),
+            name: model.name.into(),
+            description: model.description.into(),
+            bytes: model.files.iter().map(|a| a.bytes).sum(),
+            installed: model.files.iter().all(&installed),
+            download_bytes: model
+                .files
+                .iter()
+                .filter(|a| !installed(a))
+                .map(|a| a.bytes)
+                .sum(),
+            runtime_bytes,
+            runtime_installed,
+        })
+        .collect()
+}
+
+/// Reuses the verified 0.1.5/0.1.6 installation in place, adds only missing files,
+/// and never fetches the old archive or any unselected model pair.
 pub(super) fn prepare(
     root: &Path,
+    model: &str,
     cancel: &AtomicBool,
     check: impl Fn() -> Result<(), String>,
+    progress: impl Fn(u64, u64),
 ) -> Result<PathBuf, String> {
-    check()?;
-    let parent = root.join("ai-runtime");
-    let destination = parent.join("realesrgan-20220424-x4plus");
-    if verify_install(&destination).is_ok() {
-        return Ok(destination);
-    }
-    fs::create_dir_all(&parent).map_err(|e| e.to_string())?;
-    let staging = parent.join(".realesrgan.pending");
-    if staging.exists() {
-        fs::remove_dir_all(&staging).map_err(|e| e.to_string())?;
-    }
-    fs::create_dir(&staging).map_err(|e| e.to_string())?;
-    let result = (|| {
-        let archive = download(cancel, &check)?;
-        check()?;
-        verify_hash(&archive, ARCHIVE_SHA256)?;
-        extract(&archive, &staging, &check)?;
-        verify_install(&staging)?;
-        storage::atomic_write(
-            &staging.join("LICENSE-runtime.txt"),
-            include_bytes!("upscale_runtime_LICENSE.txt"),
-        )?;
-        storage::atomic_write(
-            &staging.join("LICENSE-model.txt"),
-            include_bytes!("upscale_model_LICENSE.txt"),
-        )?;
-        check()?;
-        if destination.exists() {
-            fs::remove_dir_all(&destination).map_err(|e| e.to_string())?;
+    let model = models::selected(Some(model))?;
+    let check = || {
+        if cancel.load(Ordering::SeqCst) {
+            return Err("Processing cancelled.".into());
         }
-        fs::rename(&staging, &destination).map_err(|e| e.to_string())?;
-        Ok(destination.clone())
+        check()
+    };
+    check()?;
+    let directory = runtime_directory(root, true)?;
+    cleanup_staging(&directory)?;
+    let missing = models::missing_assets(model, |a| asset_installed(&directory, a));
+    let total = missing.iter().map(|a| a.bytes).sum();
+    let mut received = 0;
+    progress(0, total);
+    for asset in missing {
+        check()?;
+        super::collections::ensure_free_space(&directory, asset.bytes + 8 * 1024 * 1024)?;
+        let bytes = download(asset, cancel, &check, &|bytes| {
+            progress(received + bytes, total)
+        })?;
+        check()?;
+        install_asset(&directory, asset, &bytes, &check)?;
+        received += asset.bytes;
+    }
+    check()?;
+    verify_install(&directory, model)?;
+    write_license(
+        &directory,
+        "LICENSE-runtime.txt",
+        include_bytes!("upscale_runtime_LICENSE.txt"),
+        &check,
+    )?;
+    write_license(
+        &directory,
+        "LICENSE-model.txt",
+        include_bytes!("upscale_model_LICENSE.txt"),
+        &check,
+    )?;
+    Ok(directory)
+}
+
+fn cleanup_staging(directory: &Path) -> Result<(), String> {
+    for parent in [directory.to_path_buf(), directory.join("models")] {
+        if !plain_path(&parent, true) {
+            return Err("Unsafe AI staging directory.".into());
+        }
+        for entry in fs::read_dir(&parent).map_err(|e| e.to_string())? {
+            let entry = entry.map_err(|e| e.to_string())?;
+            let name = entry.file_name();
+            let owned = name
+                .to_str()
+                .and_then(|name| name.strip_prefix(".wallta-ai-"))
+                .and_then(|name| name.strip_suffix(".pending"))
+                .is_some_and(|id| {
+                    id.len() == 32
+                        && id
+                            .bytes()
+                            .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+                });
+            if owned && plain_path(&entry.path(), false) {
+                fs::remove_file(entry.path()).map_err(|e| e.to_string())?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn write_license(
+    directory: &Path,
+    name: &str,
+    bytes: &[u8],
+    check: &impl Fn() -> Result<(), String>,
+) -> Result<(), String> {
+    publish_bytes(directory, name, bytes, check)
+}
+
+fn install_asset(
+    directory: &Path,
+    asset: &models::Asset,
+    bytes: &[u8],
+    check: &impl Fn() -> Result<(), String>,
+) -> Result<(), String> {
+    if bytes.len() as u64 != asset.bytes {
+        return Err("AI asset has an unexpected byte length.".into());
+    }
+    verify_hash(bytes, asset.sha256)?;
+    publish_bytes(directory, asset.path, bytes, check)?;
+    if !asset_installed(directory, asset) {
+        return Err("AI asset failed verification after publication.".into());
+    }
+    Ok(())
+}
+
+/// A unique create-new sibling prevents following an existing .tmp link. Only a
+/// completed verified file is atomically renamed over the old asset.
+fn publish_bytes(
+    directory: &Path,
+    name: &str,
+    bytes: &[u8],
+    check: &impl Fn() -> Result<(), String>,
+) -> Result<(), String> {
+    check()?;
+    policy::safe_archive_name(name)?;
+    let target = directory.join(name);
+    let parent = target.parent().ok_or("Invalid AI asset directory.")?;
+    if !plain_path(directory, true)
+        || !plain_path(parent, true)
+        || !parent
+            .canonicalize()
+            .map_err(|e| e.to_string())?
+            .starts_with(directory.canonicalize().map_err(|e| e.to_string())?)
+        || fs::symlink_metadata(&target).is_ok_and(|_| !plain_path(&target, false))
+    {
+        return Err("Unsafe AI asset path.".into());
+    }
+    let staging = parent.join(format!(
+        ".wallta-ai-{:032x}.pending",
+        rand::random::<u128>()
+    ));
+    let result = (|| {
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&staging)
+            .map_err(|e| e.to_string())?;
+        file.write_all(bytes)
+            .and_then(|_| file.sync_all())
+            .map_err(|e| e.to_string())?;
+        drop(file);
+        check()?;
+        if !plain_path(parent, true) {
+            return Err("Unsafe AI asset directory.".into());
+        }
+        atomic_rename(&staging, &target)
     })();
     if result.is_err() {
-        let _ = fs::remove_dir_all(&staging);
+        let _ = fs::remove_file(&staging);
     }
     result
 }
 
+#[cfg(windows)]
+fn atomic_rename(from: &Path, to: &Path) -> Result<(), String> {
+    use std::os::windows::ffi::OsStrExt;
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn MoveFileExW(existing: *const u16, new: *const u16, flags: u32) -> i32;
+    }
+    let from: Vec<u16> = from.as_os_str().encode_wide().chain(Some(0)).collect();
+    let to: Vec<u16> = to.as_os_str().encode_wide().chain(Some(0)).collect();
+    if unsafe { MoveFileExW(from.as_ptr(), to.as_ptr(), 0x1 | 0x8) } == 0 {
+        return Err(std::io::Error::last_os_error().to_string());
+    }
+    Ok(())
+}
+#[cfg(not(windows))]
+fn atomic_rename(from: &Path, to: &Path) -> Result<(), String> {
+    fs::rename(from, to).map_err(|e| e.to_string())
+}
+
 #[cfg(not(windows))]
 fn download(
+    _asset: &models::Asset,
     _cancel: &AtomicBool,
     _check: &impl Fn() -> Result<(), String>,
+    _progress: &impl Fn(u64),
 ) -> Result<Vec<u8>, String> {
     Err("AI processing requires Windows.".into())
 }
 
 #[cfg(windows)]
 fn download(
+    asset: &models::Asset,
     cancel: &AtomicBool,
     check: &impl Fn() -> Result<(), String>,
+    progress: &impl Fn(u64),
 ) -> Result<Vec<u8>, String> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -139,7 +377,7 @@ fn download(
                         )
                     )
                 {
-                    attempt.error("Unexpected AI runtime download redirect")
+                    attempt.error("Unexpected AI asset download redirect")
                 } else {
                     attempt.follow()
                 }
@@ -156,93 +394,68 @@ fn download(
             }
         };
         let receive = async {
+            let name = asset
+                .path
+                .rsplit('/')
+                .next()
+                .ok_or("Invalid pinned AI asset.")?;
             let mut response = client
-                .get(ARCHIVE_URL)
+                .get(format!("{ASSET_BASE}/{name}"))
                 .header("User-Agent", "Wallta")
                 .send()
                 .await
-                .map_err(|e| format!("Cannot download AI runtime: {e}"))?
+                .map_err(|e| format!("Cannot download AI asset: {e}"))?
                 .error_for_status()
                 .map_err(|e| e.to_string())?;
             if response
                 .content_length()
-                .is_some_and(|size| size > MAX_ARCHIVE)
+                .is_some_and(|size| size != asset.bytes)
             {
-                return Err("AI runtime archive exceeds its limit.".into());
+                return Err("AI asset has an unexpected byte length.".into());
             }
-            let mut archive = Vec::new();
+            let mut bytes = Vec::with_capacity(asset.bytes as usize);
             while let Some(chunk) = response.chunk().await.map_err(|e| e.to_string())? {
                 check()?;
-                if archive.len() as u64 + chunk.len() as u64 > MAX_ARCHIVE {
-                    return Err("AI runtime archive exceeds its limit.".into());
+                if bytes.len() as u64 + chunk.len() as u64 > asset.bytes {
+                    return Err("AI asset exceeds its byte limit.".into());
                 }
-                archive.extend_from_slice(&chunk);
+                bytes.extend_from_slice(&chunk);
+                progress(bytes.len() as u64);
             }
-            Ok(archive)
+            if bytes.len() as u64 != asset.bytes {
+                return Err("AI asset download was incomplete.".into());
+            }
+            verify_hash(&bytes, asset.sha256)?;
+            Ok(bytes)
         };
         tokio::select! { result = receive => result, result = stopped => result }
     })
 }
 
-fn extract(
-    bytes: &[u8],
-    directory: &Path,
-    check: &impl Fn() -> Result<(), String>,
-) -> Result<(), String> {
-    let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).map_err(|e| e.to_string())?;
-    if archive.len() > 100 {
-        return Err("Unexpected AI runtime archive.".into());
-    }
-    for (name, expected) in FILES {
-        check()?;
-        policy::safe_archive_name(name)?;
-        let mut file = archive.by_name(name).map_err(|e| e.to_string())?;
-        if file.is_dir()
-            || file
-                .unix_mode()
-                .is_some_and(|mode| mode & 0o170000 == 0o120000)
-            || file.size() > 40 * 1024 * 1024
-        {
-            return Err("Unsafe AI runtime archive entry.".into());
-        }
-        let mut output = Vec::new();
-        file.by_ref()
-            .take(40 * 1024 * 1024 + 1)
-            .read_to_end(&mut output)
-            .map_err(|e| e.to_string())?;
-        if output.len() > 40 * 1024 * 1024 {
-            return Err("AI runtime entry exceeds its limit.".into());
-        }
-        verify_hash(&output, expected)?;
-        let path = directory.join(name);
-        fs::create_dir_all(path.parent().ok_or("Invalid AI runtime path.")?)
-            .map_err(|e| e.to_string())?;
-        storage::atomic_write(&path, &output)?;
-    }
-    Ok(())
-}
-
 #[cfg(not(windows))]
 pub(super) fn process(
     _runtime: &Path,
+    _model: &str,
     _original: &DynamicImage,
     _directory: &Path,
     _cancel: &AtomicBool,
     _check: impl Fn() -> Result<(), String>,
-) -> Result<Vec<u8>, String> {
+) -> Result<Vec<u8>, ProcessFailure> {
     Err("AI processing requires Windows.".into())
 }
 
 #[cfg(windows)]
 pub(super) fn process(
     runtime: &Path,
+    model: &str,
     original: &DynamicImage,
     directory: &Path,
     cancel: &AtomicBool,
     check: impl Fn() -> Result<(), String>,
-) -> Result<Vec<u8>, String> {
+) -> Result<Vec<u8>, ProcessFailure> {
     check()?;
-    verify_install(runtime)?;
+    let model = models::selected(Some(model))?;
+    verify_install(runtime, model)?;
     let input = directory.join("ai-input.png");
     let output = directory.join("ai-output.png");
     let result = (|| {
@@ -267,7 +480,7 @@ pub(super) fn process(
             OsString::from("-m"),
             runtime.join("models").into_os_string(),
             OsString::from("-n"),
-            OsString::from("realesrgan-x4plus"),
+            OsString::from(model.runtime_name),
             OsString::from("-s"),
             OsString::from("4"),
             OsString::from("-t"),
@@ -286,10 +499,14 @@ pub(super) fn process(
                 return Err("Processing cancelled.".into());
             }
             if started.elapsed() > Duration::from_secs(10 * 60) {
-                return Err("AI processing exceeded the 10 minute image limit.".into());
+                return Err(ProcessFailure::Item(
+                    "AI processing exceeded the 10 minute image limit.".into(),
+                ));
             }
             if fs::metadata(&output).is_ok_and(|meta| meta.len() > MAX_OUTPUT) {
-                return Err("AI result exceeds its size limit.".into());
+                return Err(ProcessFailure::Item(
+                    "AI result exceeds its size limit.".into(),
+                ));
             }
             if let Some(success) = child.try_wait()? {
                 if !success {
@@ -302,12 +519,16 @@ pub(super) fn process(
         check()?;
         // NCNN creates a 4× image (up to 7680×4320); only this bounded
         // intermediate gets the 40 MP limit. Originals stay at 32 MP.
-        let image = decode_limited(&read_bounded(&output, MAX_OUTPUT)?, 40_000_000)?;
+        let image = decode_limited(&read_bounded(&output, MAX_OUTPUT)?, 40_000_000)
+            .map_err(ProcessFailure::Item)?;
         if image.width() != w * 4 || image.height() != h * 4 {
-            return Err("AI runtime returned unexpected dimensions.".into());
+            return Err(ProcessFailure::Item(
+                "AI runtime returned unexpected dimensions.".into(),
+            ));
         }
         let (target_w, target_h) = policy::target_dimensions(original.width(), original.height())?;
         jpeg(&image.resize_exact(target_w, target_h, FilterType::Lanczos3))
+            .map_err(ProcessFailure::Item)
     })();
     let _ = fs::remove_file(&input);
     let _ = fs::remove_file(&output);
@@ -318,22 +539,109 @@ pub(super) fn process(
 mod tests {
     use super::*;
 
-    #[test]
-    fn existing_runtime_must_verify_every_executable_dll_and_model() {
-        let temp = tempfile::tempdir().unwrap();
-        assert!(verify_install(temp.path()).is_err());
-        for (name, _) in FILES {
-            let path = temp.path().join(name);
-            fs::create_dir_all(path.parent().unwrap()).unwrap();
-            fs::write(path, b"tampered").unwrap();
+    fn fixture() -> models::Asset {
+        models::Asset {
+            path: "models/test.bin",
+            bytes: 7,
+            sha256: "239f59ed55e737c77147cf55ad0c1b030b6d7ee748a7426952f9b852d5a935e5",
         }
-        assert!(verify_install(temp.path()).is_err());
     }
 
     #[test]
-    fn invalid_archive_cannot_publish_an_executable() {
+    fn metadata_lists_three_models_without_creating_or_downloading_files() {
         let temp = tempfile::tempdir().unwrap();
-        assert!(extract(b"not a zip", temp.path(), &|| Ok(())).is_err());
-        assert!(!temp.path().join("realesrgan-ncnn-vulkan.exe").exists());
+        let before = fs::read_dir(temp.path()).unwrap().count();
+        let entries = catalog(temp.path());
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0].id, "photo");
+        assert_eq!(entries[1].bytes, 8_973_790);
+        assert_eq!(entries[2].download_bytes, 1_250_445);
+        assert!(entries
+            .iter()
+            .all(|entry| !entry.installed && !entry.runtime_installed));
+        assert_eq!(fs::read_dir(temp.path()).unwrap().count(), before);
+    }
+
+    #[test]
+    fn published_asset_is_exact_length_and_hash_verified() {
+        let temp = tempfile::tempdir().unwrap();
+        fs::create_dir(temp.path().join("models")).unwrap();
+        let asset = fixture();
+        install_asset(temp.path(), &asset, b"payload", &|| Ok(())).unwrap();
+        assert!(asset_installed(temp.path(), &asset));
+        fs::write(temp.path().join(asset.path), b"changed").unwrap();
+        assert!(!asset_installed(temp.path(), &asset));
+        assert!(install_asset(temp.path(), &asset, b"corrupt", &|| Ok(())).is_err());
+        assert_eq!(fs::read(temp.path().join(asset.path)).unwrap(), b"changed");
+        assert!(install_asset(temp.path(), &asset, b"payload-extra", &|| Ok(())).is_err());
+    }
+
+    #[test]
+    fn cancellation_before_publication_keeps_existing_files_and_removes_staging() {
+        let temp = tempfile::tempdir().unwrap();
+        fs::create_dir(temp.path().join("models")).unwrap();
+        let asset = fixture();
+        fs::write(temp.path().join(asset.path), b"old-file").unwrap();
+        let checks = std::cell::Cell::new(0);
+        assert!(install_asset(temp.path(), &asset, b"payload", &|| {
+            checks.set(checks.get() + 1);
+            if checks.get() > 1 {
+                Err("Processing cancelled.".into())
+            } else {
+                Ok(())
+            }
+        })
+        .is_err());
+        assert_eq!(
+            checks.get(),
+            2,
+            "Cancellation must be checked after staging too."
+        );
+        assert_eq!(fs::read(temp.path().join(asset.path)).unwrap(), b"old-file");
+        assert_eq!(fs::read_dir(temp.path().join("models")).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn interrupted_download_staging_is_reclaimed_without_removing_other_files() {
+        let temp = tempfile::tempdir().unwrap();
+        fs::create_dir(temp.path().join("models")).unwrap();
+        let owned = temp
+            .path()
+            .join("models/.wallta-ai-0123456789abcdef0123456789abcdef.pending");
+        let arbitrary = temp.path().join("models/my-file.pending");
+        fs::write(&owned, b"incomplete").unwrap();
+        fs::write(&arbitrary, b"keep").unwrap();
+        cleanup_staging(temp.path()).unwrap();
+        assert!(!owned.exists());
+        assert_eq!(fs::read(arbitrary).unwrap(), b"keep");
+    }
+
+    #[test]
+    fn existing_runtime_must_verify_every_executable_dll_and_selected_model() {
+        let temp = tempfile::tempdir().unwrap();
+        let model = models::selected(Some("photo")).unwrap();
+        assert!(verify_install(temp.path(), model).is_err());
+        for asset in models::RUNTIME.iter().chain(model.files) {
+            let path = temp.path().join(asset.path);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, b"tampered").unwrap();
+        }
+        assert!(verify_install(temp.path(), model).is_err());
+        assert!(verify_install(temp.path(), models::selected(Some("anime")).unwrap()).is_err());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn runtime_directory_cannot_escape_through_a_junction_or_symlink() {
+        let temp = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        // Developer Mode/administrator permission is not always available in CI.
+        if std::os::windows::fs::symlink_dir(outside.path(), temp.path().join("ai-runtime"))
+            .is_err()
+        {
+            return;
+        }
+        assert!(runtime_directory(temp.path(), true).is_err());
+        assert!(fs::read_dir(outside.path()).unwrap().next().is_none());
     }
 }

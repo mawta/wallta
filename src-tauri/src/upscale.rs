@@ -20,18 +20,22 @@ use std::{
 
 #[path = "upscale_cleanup.rs"]
 mod cleanup;
+#[path = "upscale_collections.rs"]
+mod collections;
 #[path = "upscale_policy.rs"]
 mod policy;
 #[path = "upscale_runtime.rs"]
 mod runtime;
+pub use collections::{CollectionInfo, StorageInfo};
 use policy::{check_operation, target_dimensions, validate_ids};
+pub use runtime::ModelInfo;
 #[cfg(test)]
 use runtime::{verify_hash, ARCHIVE_SHA256};
 
 const MAX_INPUT: u64 = 32 * 1024 * 1024;
 const MAX_OUTPUT: u64 = 64 * 1024 * 1024;
 const CACHE_BUDGET: u64 = 256 * 1024 * 1024;
-const JOB_BUDGET: u64 = 768 * 1024 * 1024;
+const MAX_PREVIEWS: usize = 20;
 const ALGORITHM_VERSION: &str = "lanczos3-jpeg92-v1/realesrgan-x4plus-20220424-hd-v2";
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -72,7 +76,13 @@ pub struct UpscaleStatus {
     pub phase: Phase,
     pub mode: UpscaleMode,
     pub completed: usize,
+    pub processed: usize,
+    pub failed: usize,
     pub total: usize,
+    pub model: Option<String>,
+    pub downloaded_bytes: u64,
+    pub total_download_bytes: u64,
+    pub source: Option<Source>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -130,7 +140,36 @@ impl UpscaleManager {
         ids: Vec<String>,
         mode: UpscaleMode,
     ) -> Result<UpscaleStatus, String> {
+        self.start_with_model(ids, mode, None)
+    }
+
+    pub fn start_with_model(
+        self: &Arc<Self>,
+        ids: Vec<String>,
+        mode: UpscaleMode,
+        model: Option<&str>,
+    ) -> Result<UpscaleStatus, String> {
         validate_ids(&ids)?;
+        self.launch(Some(ids), None, mode, model)
+    }
+
+    pub fn start_all(
+        self: &Arc<Self>,
+        source_id: Option<String>,
+        mode: UpscaleMode,
+        model: Option<&str>,
+    ) -> Result<UpscaleStatus, String> {
+        self.launch(None, source_id, mode, model)
+    }
+
+    fn launch(
+        self: &Arc<Self>,
+        ids: Option<Vec<String>>,
+        source_id: Option<String>,
+        mode: UpscaleMode,
+        model: Option<&str>,
+    ) -> Result<UpscaleStatus, String> {
+        let model = runtime::parse_model(model)?.to_owned();
         #[cfg(not(windows))]
         if mode == UpscaleMode::Ai {
             return Err("AI processing requires Windows and a Vulkan-capable GPU.".into());
@@ -160,7 +199,8 @@ impl UpscaleManager {
                         Phase::Processing
                     },
                     mode,
-                    total: ids.len(),
+                    model: Some(model.clone()),
+                    total: ids.as_ref().map_or(0, Vec::len),
                     message: Some("Preparing local image processing…".into()),
                     ..Default::default()
                 },
@@ -184,7 +224,15 @@ impl UpscaleManager {
                     if let Some(previous) = previous {
                         let _ = fs::remove_dir_all(manager.job_directory(&previous));
                     }
-                    manager.process(&job_id, &ids, mode, &cancel, revision)
+                    manager.process(
+                        &job_id,
+                        ids,
+                        source_id.as_deref(),
+                        mode,
+                        &model,
+                        &cancel,
+                        revision,
+                    )
                 }))
                 .unwrap_or_else(|_| Err("Image processing failed unexpectedly.".into()));
                 let should_cleanup = {
@@ -192,22 +240,29 @@ impl UpscaleManager {
                     state.running = false;
                     if cancel.load(Ordering::SeqCst) {
                         state.status.phase = Phase::Cancelled;
-                        state.status.results.clear();
-                        state.outputs.clear();
                     } else if let Err(error) = result {
                         state.status.phase = Phase::Error;
                         state.status.error = Some(error);
                     } else {
                         state.status.phase = Phase::Ready;
                         state.status.message = Some(
-                            "Results are ready. Save to create a local Ảnh 4K collection.".into(),
+                            "Completed images have been saved to the local Ảnh 4K collection."
+                                .into(),
                         );
                     }
-                    state.status.phase == Phase::Cancelled
-                        || (state.status.phase == Phase::Error && state.outputs.is_empty())
+                    state.saved.is_none()
+                        && matches!(state.status.phase, Phase::Cancelled | Phase::Error)
                 };
                 if should_cleanup {
                     let _ = fs::remove_dir_all(manager.job_directory(&job_id));
+                    if let Ok(runtime) = manager.engine.inner.lock() {
+                        let references = local_references(&runtime.state.sources);
+                        let _ = cleanup::remove_unreferenced(
+                            &manager.engine.store.root,
+                            &manager.engine.store.root.join("upscaled").join(&job_id),
+                            &references,
+                        );
+                    }
                 }
             })
             .map_err(|e| {
@@ -225,19 +280,15 @@ impl UpscaleManager {
         let _control = self.control.lock().map_err(|e| e.to_string())?;
         let cleanup = {
             let mut state = self.inner.lock().map_err(|e| e.to_string())?;
-            if job_id.is_some_and(|id| state.status.job_id.as_deref() != Some(id))
-                || state.saved.is_some()
-            {
+            if job_id.is_some_and(|id| state.status.job_id.as_deref() != Some(id)) {
                 return Ok(state.status.clone());
             }
             state.cancel.store(true, Ordering::SeqCst);
             if state.status.job_id.is_some() {
                 state.status.phase = Phase::Cancelled;
             }
-            state.status.results.clear();
-            state.outputs.clear();
             state.status.error = None;
-            if state.running {
+            if state.running || state.saved.is_some() {
                 None
             } else {
                 state.status.job_id.clone()
@@ -330,120 +381,424 @@ impl UpscaleManager {
         )
     }
 
+    pub fn models(&self) -> Result<Vec<ModelInfo>, String> {
+        Ok(runtime::catalog(&self.engine.store.root))
+    }
+
+    pub fn storage(&self) -> Result<StorageInfo, String> {
+        let state = self.engine.snapshot()?;
+        collections::catalog(
+            &self.engine.store.root,
+            &self.engine.store.cache,
+            &state.sources,
+        )
+    }
+
+    pub fn clear_cache(&self) -> Result<StorageInfo, String> {
+        let _control = self.control.lock().map_err(|e| e.to_string())?;
+        if self.inner.lock().map_err(|e| e.to_string())?.running {
+            return Err("Wait for image processing and downloads before clearing cache.".into());
+        }
+        self.engine.clear_image_cache()?;
+        if let Some(base) = cleanup::managed_base(&self.engine.store.cache, "upscale") {
+            // Only owned, validated cache subtrees. Models and saved files live elsewhere.
+            for folder in ["results", "jobs"] {
+                let path = base.join(folder);
+                if cleanup::plain_directory(&path)
+                    && path
+                        .canonicalize()
+                        .is_ok_and(|path| path.parent() == Some(base.as_path()))
+                {
+                    fs::remove_dir_all(path).map_err(|e| e.to_string())?;
+                }
+            }
+        }
+        self.inner
+            .lock()
+            .map_err(|e| e.to_string())?
+            .status
+            .results
+            .clear();
+        self.storage()
+    }
+
+    pub fn delete_collection(&self, id: &str) -> Result<StorageInfo, String> {
+        let _control = self.control.lock().map_err(|e| e.to_string())?;
+        {
+            let state = self.inner.lock().map_err(|e| e.to_string())?;
+            if state.running && state.status.job_id.as_deref() == Some(id) {
+                return Err(
+                    "This collection is still being written. Cancel and wait before deleting it."
+                        .into(),
+                );
+            }
+        }
+        let path = cleanup::collection_path(&self.engine.store.root, id)?;
+        self.engine.delete_upscale_collection(&path)?;
+        let mut state = self.inner.lock().map_err(|e| e.to_string())?;
+        if state.status.job_id.as_deref() == Some(id) {
+            state.saved = None;
+            state.status.source = None;
+            state.outputs.clear();
+            state.status.results.clear();
+        }
+        drop(state);
+        self.storage()
+    }
+
     fn process(
         &self,
         job: &str,
-        ids: &[String],
+        ids: Option<Vec<String>>,
+        source_id: Option<&str>,
         mode: UpscaleMode,
+        model: &str,
         cancel: &AtomicBool,
         revision: u64,
     ) -> Result<(), String> {
+        self.process_with(
+            job,
+            ids,
+            source_id,
+            mode,
+            model,
+            cancel,
+            revision,
+            |bytes, directory, cache, cancel, revision, ai_runtime| {
+                self.prepare_image(
+                    bytes, mode, model, directory, cache, cancel, revision, ai_runtime,
+                )
+            },
+        )
+    }
+
+    fn process_with<F>(
+        &self,
+        job: &str,
+        ids: Option<Vec<String>>,
+        source_id: Option<&str>,
+        mode: UpscaleMode,
+        model: &str,
+        cancel: &AtomicBool,
+        mut revision: u64,
+        mut prepare: F,
+    ) -> Result<(), String>
+    where
+        F: FnMut(
+            &[u8],
+            &Path,
+            &Path,
+            &AtomicBool,
+            u64,
+            &mut Option<PathBuf>,
+        ) -> Result<PreparedImage, ImageFailure>,
+    {
         self.check(cancel, revision)?;
+        let all = if ids.is_none() {
+            Some(self.engine.upscale_all_items(source_id, revision)?)
+        } else {
+            None
+        };
+        let ids = ids.unwrap_or_else(|| {
+            all.as_ref()
+                .unwrap()
+                .iter()
+                .map(|item| item.id.clone())
+                .collect()
+        });
+        if ids.is_empty() {
+            return Err("No images found in the enabled original sources.".into());
+        }
+        self.inner.lock().map_err(|e| e.to_string())?.status.total = ids.len();
         let directory = self.job_directory(job);
         fs::create_dir_all(&directory).map_err(|e| e.to_string())?;
         let cache = self.engine.store.cache.join("upscale/results");
         fs::create_dir_all(&cache).map_err(|e| e.to_string())?;
         prune_results(&cache, CACHE_BUDGET)?;
-        let mut runtime = None;
-        let mut disk_used = 0;
+        let mut ai_runtime = None;
+        let created = chrono::Utc::now();
+        let scope = self
+            .engine
+            .upscale_scope_name(&ids, all.as_deref(), revision)?;
+        let name = policy::collection_label(
+            &scope,
+            (mode == UpscaleMode::Ai).then_some(model),
+            &created
+                .with_timezone(&chrono::Local)
+                .format("%Y-%m-%d %H:%M:%S")
+                .to_string(),
+        );
+        let mut manifest = CollectionInfo {
+            id: job.into(),
+            name,
+            model: (mode == UpscaleMode::Ai).then(|| model.to_owned()),
+            created_at: Some(created.to_rfc3339()),
+            count: 0,
+            bytes: 0,
+            source_id: None,
+        };
         for (index, id) in ids.iter().enumerate() {
             self.check(cancel, revision)?;
-            // Each AI invocation has its own timeout. A progressing batch may
-            // legitimately take longer than 30 minutes across multiple images.
+            collections::ensure_free_space(&self.engine.store.root, 3 * MAX_OUTPUT + MAX_INPUT)?;
             {
                 let mut state = self.inner.lock().map_err(|e| e.to_string())?;
                 state.status.phase = Phase::Processing;
                 state.status.message =
                     Some(format!("Processing image {} of {}…", index + 1, ids.len()));
             }
-            let (media, _, bytes, input_revision) = self.engine.upscale_input(id)?;
-            check_operation(cancel, revision, input_revision)?;
-            self.check(cancel, revision)?;
-            if bytes.len() as u64 > MAX_INPUT {
-                return Err("Original image exceeds the 32 MB limit.".into());
-            }
-            let original = decode(&bytes)?;
-            let original_preview = jpeg(&original.thumbnail(1200, 1200))?;
-            let key = cache_key(&bytes, mode);
-            let cached = cache.join(format!("{key}.jpg"));
-            let output = match read_bounded(&cached, MAX_OUTPUT).and_then(|bytes| {
-                let decoded = decode(&bytes)?;
-                if decoded.dimensions() != target_dimensions(original.width(), original.height())? {
-                    return Err("Invalid cached result.".into());
-                }
-                Ok(bytes)
-            }) {
-                Ok(bytes) => bytes,
-                Err(_) => {
-                    let bytes = if mode == UpscaleMode::Ai
-                        && policy::needs_ai(original.width(), original.height())?
-                    {
-                        if runtime.is_none() {
-                            {
-                                let mut state = self.inner.lock().map_err(|e| e.to_string())?;
-                                state.status.phase = Phase::Downloading;
-                                state.status.message =
-                                    Some("Preparing verified local AI runtime…".into());
-                            }
-                            runtime =
-                                Some(runtime::prepare(&self.engine.store.root, cancel, || {
-                                    self.check(cancel, revision)
-                                })?);
-                            self.inner.lock().map_err(|e| e.to_string())?.status.phase =
-                                Phase::Processing;
-                        }
-                        runtime::process(
-                            runtime.as_ref().ok_or("AI runtime is unavailable.")?,
-                            &original,
-                            &directory,
-                            cancel,
-                            || self.check(cancel, revision),
-                        )?
-                    } else {
-                        fast_process(&bytes)?
-                    };
-                    self.check(cancel, revision)?;
-                    if bytes.len() as u64 > MAX_OUTPUT {
-                        return Err("Processed image exceeds the 64 MB limit.".into());
-                    }
-                    // Evict before the write so the persistent cache stays bounded.
-                    prune_results(&cache, CACHE_BUDGET.saturating_sub(bytes.len() as u64))?;
-                    storage::atomic_write(&cached, &bytes)?;
-                    bytes
+            let input = if let Some(items) = &all {
+                self.engine
+                    .upscale_snapshot_input(&items[index], revision)
+                    .map(|bytes| (items[index].clone(), bytes))
+            } else {
+                self.engine
+                    .upscale_input(id)
+                    .and_then(|(media, _, bytes, input_revision)| {
+                        check_operation(cancel, revision, input_revision)?;
+                        Ok((media, bytes))
+                    })
+            };
+            let (media, bytes) = match input {
+                Ok(input) => input,
+                Err(error) => {
+                    self.record_failure(&error)?;
+                    return Err(error);
                 }
             };
-            self.check(cancel, revision)?;
-            let result = decode(&output)?;
-            let result_preview = jpeg(&result.thumbnail(1200, 1200))?;
-            disk_used += (output.len() + original_preview.len() + result_preview.len()) as u64;
-            if disk_used > JOB_BUDGET {
-                return Err(
-                    "Processing results exceed the 768 MB job disk limit. Select fewer images."
-                        .into(),
-                );
+            let prepared = prepare(
+                &bytes,
+                &directory,
+                &cache,
+                cancel,
+                revision,
+                &mut ai_runtime,
+            );
+            let (output, width, height, before, after) = match prepared {
+                Ok(prepared) => prepared,
+                Err(ImageFailure::Item(error)) => {
+                    self.check(cancel, revision)?;
+                    self.record_failure(&error)?;
+                    continue;
+                }
+                Err(ImageFailure::Fatal(error)) => {
+                    self.record_failure(&error)?;
+                    return Err(error);
+                }
+            };
+            let completed_before = self
+                .inner
+                .lock()
+                .map_err(|e| e.to_string())?
+                .status
+                .completed;
+            let published = (|| -> Result<(), String> {
+                // Cancellation and publication share this short lifecycle lock.
+                let _control = self.control.lock().map_err(|e| e.to_string())?;
+                self.check(cancel, revision)?;
+                let parent = self.engine.store.root.join("upscaled");
+                fs::create_dir_all(&parent).map_err(|e| e.to_string())?;
+                if !cleanup::plain_directory(&parent) {
+                    return Err("Managed image storage contains an unsafe link.".into());
+                }
+                let collection = parent.join(job);
+                if !collection.exists() {
+                    fs::create_dir(&collection).map_err(|e| e.to_string())?;
+                }
+                // Authorize the direct owned folder before writing or publishing any output.
+                let collection = cleanup::collection_path(&self.engine.store.root, job)?;
+                let path = collection.join(format!("{:03}.jpg", manifest.count + 1));
+                storage::atomic_write(&path, &output)?;
+                manifest.count += 1;
+                manifest.bytes += output.len() as u64;
+                collections::write_manifest(&collection, &manifest)?;
+                let published = self.inner.lock().map_err(|e| e.to_string())?.saved.clone();
+                let source = match published {
+                    Some(source) => {
+                        self.check(cancel, revision)?;
+                        source
+                    }
+                    None => {
+                        let (source, own_revision) = self.engine.accept_upscale_source_named(
+                            &collection,
+                            revision,
+                            &manifest.name,
+                        )?;
+                        // This revision comes from inside the publication lock; never load-and-rebase
+                        // an unrelated external mutation after releasing the engine lock.
+                        revision = own_revision;
+                        source
+                    }
+                };
+                let mut state = self.inner.lock().map_err(|e| e.to_string())?;
+                state.revision = revision;
+                state.saved = Some(source.clone());
+                state.status.source = Some(source.clone());
+                state.status.completed += 1;
+                state.status.processed += 1;
+                manifest.source_id = Some(source.id);
+                // Retain at most twenty preview pairs, regardless of the batch size.
+                if state.status.results.len() < MAX_PREVIEWS {
+                    let before_path = directory.join(format!("{index}-before.jpg"));
+                    let after_path = directory.join(format!("{index}-after.jpg"));
+                    storage::atomic_write(&before_path, &before)?;
+                    storage::atomic_write(&after_path, &after)?;
+                    state.status.results.push(UpscaleResult {
+                        id: media.id,
+                        name: media.name,
+                        width,
+                        height,
+                        original_preview: before_path.to_string_lossy().into_owned(),
+                        result_preview: after_path.to_string_lossy().into_owned(),
+                    });
+                }
+                Ok(())
+            })();
+            if let Err(error) = published {
+                // Preview failure after publication does not turn a saved image into a failure.
+                if self
+                    .inner
+                    .lock()
+                    .map_err(|e| e.to_string())?
+                    .status
+                    .completed
+                    == completed_before
+                {
+                    self.record_failure(&error)?;
+                }
+                return Err(error);
             }
-            let path = directory.join(format!("{index}.jpg"));
-            let before = directory.join(format!("{index}-before.jpg"));
-            let after = directory.join(format!("{index}-after.jpg"));
-            storage::atomic_write(&path, &output)?;
-            storage::atomic_write(&before, &original_preview)?;
-            storage::atomic_write(&after, &result_preview)?;
-            self.check(cancel, revision)?;
-            let mut state = self.inner.lock().map_err(|e| e.to_string())?;
-            self.check(cancel, revision)?;
-            state.outputs.push(path);
-            state.status.results.push(UpscaleResult {
-                id: media.id,
-                name: media.name,
-                width: result.width(),
-                height: result.height(),
-                original_preview: before.to_string_lossy().into_owned(),
-                result_preview: after.to_string_lossy().into_owned(),
-            });
-            state.status.completed = index + 1;
         }
-        self.check(cancel, revision)
+        self.check(cancel, revision)?;
+        let state = self.inner.lock().map_err(|e| e.to_string())?;
+        if state.status.failed > 0 {
+            return Err(format!(
+                "{} images could not be processed. Completed images have been saved.",
+                state.status.failed
+            ));
+        }
+        Ok(())
     }
+
+    fn record_failure(&self, error: &str) -> Result<(), String> {
+        let mut state = self.inner.lock().map_err(|e| e.to_string())?;
+        state.status.failed += 1;
+        state.status.processed += 1;
+        state.status.message = Some(error.to_owned());
+        Ok(())
+    }
+
+    fn prepare_image(
+        &self,
+        bytes: &[u8],
+        mode: UpscaleMode,
+        model: &str,
+        directory: &Path,
+        cache: &Path,
+        cancel: &AtomicBool,
+        revision: u64,
+        ai_runtime: &mut Option<PathBuf>,
+    ) -> Result<PreparedImage, ImageFailure> {
+        use ImageFailure::{Fatal, Item};
+        if bytes.len() as u64 > MAX_INPUT {
+            return Err(Item("Original image exceeds the 32 MB limit.".into()));
+        }
+        let original = decode(bytes).map_err(Item)?;
+        let before = jpeg(&original.thumbnail(1200, 1200)).map_err(Item)?;
+        let key = model_cache_key(bytes, mode, model);
+        let cached = cache.join(format!("{key}.jpg"));
+        let output = match read_bounded(&cached, MAX_OUTPUT).and_then(|bytes| {
+            if decode(&bytes)?.dimensions()
+                != target_dimensions(original.width(), original.height())?
+            {
+                return Err("Invalid cached result.".into());
+            }
+            Ok(bytes)
+        }) {
+            Ok(bytes) => bytes,
+            Err(_) => {
+                let bytes = if mode == UpscaleMode::Ai
+                    && policy::needs_ai(original.width(), original.height()).map_err(Item)?
+                {
+                    if ai_runtime.is_none() {
+                        self.inner
+                            .lock()
+                            .map_err(|e| Fatal(e.to_string()))?
+                            .status
+                            .phase = Phase::Downloading;
+                        *ai_runtime = Some(
+                            runtime::prepare(
+                                &self.engine.store.root,
+                                model,
+                                cancel,
+                                || self.check(cancel, revision),
+                                |downloaded, total| {
+                                    if let Ok(mut state) = self.inner.lock() {
+                                        state.status.downloaded_bytes = downloaded;
+                                        state.status.total_download_bytes = total;
+                                    }
+                                },
+                            )
+                            .map_err(Fatal)?,
+                        );
+                        self.inner
+                            .lock()
+                            .map_err(|e| Fatal(e.to_string()))?
+                            .status
+                            .phase = Phase::Processing;
+                    }
+                    runtime::process(
+                        ai_runtime
+                            .as_ref()
+                            .ok_or_else(|| Fatal("AI runtime is unavailable.".into()))?,
+                        model,
+                        &original,
+                        directory,
+                        cancel,
+                        || self.check(cancel, revision),
+                    )
+                    .map_err(ImageFailure::from)?
+                } else {
+                    fast_process(bytes).map_err(Item)?
+                };
+                self.check(cancel, revision).map_err(Fatal)?;
+                if bytes.len() as u64 > MAX_OUTPUT {
+                    return Err(Item("Processed image exceeds the 64 MB limit.".into()));
+                }
+                prune_results(cache, CACHE_BUDGET.saturating_sub(bytes.len() as u64))
+                    .map_err(Fatal)?;
+                storage::atomic_write(&cached, &bytes).map_err(Fatal)?;
+                bytes
+            }
+        };
+        let result = decode(&output).map_err(Item)?;
+        let after = jpeg(&result.thumbnail(1200, 1200)).map_err(Item)?;
+        Ok((output, result.width(), result.height(), before, after))
+    }
+}
+
+type PreparedImage = (Vec<u8>, u32, u32, Vec<u8>, Vec<u8>);
+
+#[derive(Debug)]
+enum ImageFailure {
+    Item(String),
+    Fatal(String),
+}
+
+impl From<runtime::ProcessFailure> for ImageFailure {
+    fn from(failure: runtime::ProcessFailure) -> Self {
+        match failure {
+            runtime::ProcessFailure::Item(error) => Self::Item(error),
+            runtime::ProcessFailure::Fatal(error) => Self::Fatal(error),
+        }
+    }
+}
+
+pub(crate) fn checked_collection_path(root: &Path, id: &str) -> Result<PathBuf, String> {
+    cleanup::collection_path(root, id)
+}
+
+pub(crate) fn canonical_with_missing_tail(path: &Path) -> Result<PathBuf, String> {
+    cleanup::canonical_with_missing_tail(path)
 }
 
 fn local_references(sources: &[Source]) -> Vec<PathBuf> {
@@ -463,8 +818,13 @@ fn local_references(sources: &[Source]) -> Vec<PathBuf> {
 }
 
 fn cache_key(bytes: &[u8], mode: UpscaleMode) -> String {
+    model_cache_key(bytes, mode, "photo")
+}
+
+fn model_cache_key(bytes: &[u8], mode: UpscaleMode, model: &str) -> String {
     let mut hash = Sha256::new();
     hash.update(ALGORITHM_VERSION);
+    hash.update(model.as_bytes());
     hash.update([mode as u8]);
     hash.update(bytes);
     format!("{:x}", hash.finalize())
@@ -565,6 +925,374 @@ fn prune_results(directory: &Path, budget: u64) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn runtime_system_failure_stops_remaining_images_while_item_failure_continues() {
+        for fatal in [false, true] {
+            let temp = tempfile::tempdir().unwrap();
+            let engine = Arc::new(
+                Engine::new(
+                    crate::storage::Store::new(temp.path().join("data"), temp.path().join("cache"))
+                        .unwrap(),
+                )
+                .unwrap(),
+            );
+            let source: Source = serde_json::from_value(serde_json::json!({
+                "id":"original", "name":"Original", "kind":"local", "location":temp.path()
+            }))
+            .unwrap();
+            let mut ids = Vec::new();
+            for index in 0..3 {
+                let file = temp.path().join(format!("{index}.png"));
+                fs::write(&file, png_test_image()).unwrap();
+                let media =
+                    crate::providers::item(file.to_string_lossy().into_owned(), None, &source.id);
+                ids.push(media.id.clone());
+                engine.inner.lock().unwrap().media.push(media);
+            }
+            engine.inner.lock().unwrap().state.sources.push(source);
+            let manager = UpscaleManager::new(engine);
+            let job = "0123456789abcdef0123456789abcdef";
+            manager.inner.lock().unwrap().status.job_id = Some(job.into());
+            let mut called = 0;
+            let outcome = manager.process_with(
+                job,
+                Some(ids),
+                None,
+                UpscaleMode::Fast,
+                "photo",
+                &AtomicBool::new(false),
+                0,
+                |bytes, directory, cache, cancel, revision, runtime| {
+                    let status = manager.status().unwrap();
+                    assert_eq!(status.processed, status.completed + status.failed);
+                    assert_eq!(
+                        status.processed, called,
+                        "An in-flight image was counted as processed"
+                    );
+                    called += 1;
+                    if called == 2 {
+                        if fatal {
+                            // Actual runtime integrity validation fails before spawn; this is a system error.
+                            return runtime::process(
+                                directory,
+                                "photo",
+                                &decode(bytes).unwrap(),
+                                directory,
+                                cancel,
+                                || Ok(()),
+                            )
+                            .map(|_| unreachable!())
+                            .map_err(ImageFailure::from);
+                        }
+                        return Err(ImageFailure::from(runtime::ProcessFailure::Item(
+                            "Per-image timeout".into(),
+                        )));
+                    }
+                    manager.prepare_image(
+                        bytes,
+                        UpscaleMode::Fast,
+                        "photo",
+                        directory,
+                        cache,
+                        cancel,
+                        revision,
+                        runtime,
+                    )
+                },
+            );
+            assert!(outcome.is_err());
+            assert_eq!(called, if fatal { 2 } else { 3 });
+            let status = manager.status().unwrap();
+            assert_eq!(status.failed, 1);
+            assert_eq!(status.completed, if fatal { 1 } else { 2 });
+            assert_eq!(status.processed, status.completed + status.failed);
+            let saved = manager.save(job).unwrap();
+            assert!(Path::new(&saved.location).join("001.jpg").is_file());
+        }
+    }
+
+    #[test]
+    fn corrupt_remote_original_is_skipped_and_valid_next_image_is_saved_without_poisoned_cache() {
+        use std::{
+            io::{Read, Write},
+            net::TcpListener,
+        };
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let valid = png_test_image();
+        listener.set_nonblocking(true).unwrap();
+        let server = std::thread::spawn(move || {
+            for body in [b"corrupt remote image".to_vec(), valid] {
+                let deadline = Instant::now() + Duration::from_secs(20);
+                let (mut stream, _) = loop {
+                    match listener.accept() {
+                        Ok(connection) => break connection,
+                        Err(error)
+                            if error.kind() == std::io::ErrorKind::WouldBlock
+                                && Instant::now() < deadline =>
+                        {
+                            std::thread::sleep(Duration::from_millis(10))
+                        }
+                        Err(error) => panic!("Expected remote image request: {error}"),
+                    }
+                };
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut request = [0; 4096];
+                stream.read(&mut request).unwrap();
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                )
+                .unwrap();
+                stream.write_all(&body).unwrap();
+            }
+        });
+        let temp = tempfile::tempdir().unwrap();
+        let engine = Arc::new(
+            Engine::new(
+                crate::storage::Store::new(temp.path().join("data"), temp.path().join("cache"))
+                    .unwrap(),
+            )
+            .unwrap(),
+        );
+        for name in ["bad", "good"] {
+            let source: Source = serde_json::from_value(serde_json::json!({
+                "id":name, "name":name, "kind":"url", "location":format!("http://{address}/{name}.png")
+            })).unwrap();
+            engine.inner.lock().unwrap().state.sources.push(source);
+        }
+        let manager = Arc::new(UpscaleManager::new(engine.clone()));
+        manager.start_all(None, UpscaleMode::Fast, None).unwrap();
+        let status = wait_finished(&manager);
+        server.join().unwrap();
+        assert_eq!(status.total, 2, "{status:?}");
+        assert_eq!(status.processed, 2, "{status:?}");
+        assert_eq!(status.failed, 1, "{status:?}");
+        assert_eq!(status.completed, 1, "{status:?}");
+        assert!(status.source.is_some());
+        let bad = crate::providers::item(format!("http://{address}/bad.png"), None, "bad");
+        assert!(!engine.store.cache.join(format!("{}.img", bad.id)).exists());
+    }
+
+    #[test]
+    fn publication_failure_counts_attempted_image_without_claiming_a_saved_result() {
+        let temp = tempfile::tempdir().unwrap();
+        let engine = Arc::new(
+            Engine::new(
+                crate::storage::Store::new(temp.path().join("data"), temp.path().join("cache"))
+                    .unwrap(),
+            )
+            .unwrap(),
+        );
+        let file = temp.path().join("original.png");
+        fs::write(&file, png_test_image()).unwrap();
+        let source: Source = serde_json::from_value(serde_json::json!({
+            "id":"original", "name":"Original", "kind":"local", "location":temp.path()
+        }))
+        .unwrap();
+        let media = crate::providers::item(file.to_string_lossy().into_owned(), None, &source.id);
+        {
+            let mut runtime = engine.inner.lock().unwrap();
+            for index in 0..100 {
+                let mut source = source.clone();
+                if index != 0 {
+                    source.id = format!("extra-{index}");
+                }
+                runtime.state.sources.push(source);
+            }
+            runtime.media.push(media.clone());
+        }
+        let manager = Arc::new(UpscaleManager::new(engine));
+        manager.start(vec![media.id], UpscaleMode::Fast).unwrap();
+        let status = wait_finished(&manager);
+        assert_eq!(status.phase, Phase::Error);
+        assert_eq!(status.processed, 1);
+        assert_eq!(status.failed, 1);
+        assert_eq!(status.completed, 0);
+        assert!(status.source.is_none());
+        assert!(manager.save(status.job_id.as_deref().unwrap()).is_err());
+    }
+
+    #[test]
+    fn model_results_have_separate_cache_identity() {
+        let bytes = png_test_image();
+        assert_ne!(
+            model_cache_key(&bytes, UpscaleMode::Ai, "photo"),
+            model_cache_key(&bytes, UpscaleMode::Ai, "anime")
+        );
+        assert_ne!(
+            model_cache_key(&bytes, UpscaleMode::Ai, "anime"),
+            model_cache_key(&bytes, UpscaleMode::Ai, "anime-light")
+        );
+    }
+
+    #[test]
+    fn cache_cleanup_preserves_models_and_collections_and_rejects_active_worker() {
+        let temp = tempfile::tempdir().unwrap();
+        let engine = Arc::new(
+            Engine::new(
+                crate::storage::Store::new(temp.path().join("data"), temp.path().join("cache"))
+                    .unwrap(),
+            )
+            .unwrap(),
+        );
+        let manager = UpscaleManager::new(engine.clone());
+        let saved = engine
+            .store
+            .root
+            .join("upscaled/0123456789abcdef0123456789abcdef");
+        let models = engine.store.root.join("ai-runtime/models");
+        fs::create_dir_all(&saved).unwrap();
+        fs::create_dir_all(&models).unwrap();
+        fs::write(saved.join("001.jpg"), b"saved").unwrap();
+        fs::write(models.join("model.bin"), b"model").unwrap();
+        let cache = engine.store.cache.join("upscale/results");
+        fs::create_dir_all(&cache).unwrap();
+        fs::write(cache.join("result.jpg"), b"reusable").unwrap();
+        fs::write(engine.store.cache.join("original.img"), b"original cache").unwrap();
+        manager.inner.lock().unwrap().running = true;
+        assert!(manager.clear_cache().is_err());
+        assert!(cache.join("result.jpg").exists());
+        manager.inner.lock().unwrap().running = false;
+        let revision = engine.revision.load(Ordering::SeqCst);
+        let storage = manager.clear_cache().unwrap();
+        assert_eq!(storage.cache_bytes, 0);
+        assert_eq!(storage.collections.len(), 1);
+        assert_eq!(storage.collections[0].count, 1);
+        assert!(saved.join("001.jpg").is_file());
+        assert!(models.join("model.bin").is_file());
+        assert_eq!(engine.revision.load(Ordering::SeqCst), revision);
+        assert!(manager.delete_collection("../outside").is_err());
+        manager
+            .delete_collection("0123456789abcdef0123456789abcdef")
+            .unwrap();
+        assert!(!saved.exists());
+    }
+
+    #[test]
+    fn all_snapshots_more_than_fifty_originals_and_excludes_owned_outputs() {
+        let temp = tempfile::tempdir().unwrap();
+        let engine = Arc::new(
+            Engine::new(
+                crate::storage::Store::new(temp.path().join("data"), temp.path().join("cache"))
+                    .unwrap(),
+            )
+            .unwrap(),
+        );
+        let originals = temp.path().join("originals");
+        fs::create_dir(&originals).unwrap();
+        for index in 0..61 {
+            fs::write(originals.join(format!("{index}.png")), png_test_image()).unwrap();
+        }
+        let owned = engine
+            .store
+            .root
+            .join("upscaled/0123456789abcdef0123456789abcdef");
+        fs::create_dir_all(&owned).unwrap();
+        fs::write(owned.join("old.jpg"), b"previous result").unwrap();
+        {
+            let mut runtime = engine.inner.lock().unwrap();
+            for (id, location) in [("originals", originals), ("upscale-old", owned)] {
+                runtime.state.sources.push(
+                    serde_json::from_value(serde_json::json!({
+                        "id": id, "name": id, "kind":"local", "location":location
+                    }))
+                    .unwrap(),
+                );
+            }
+        }
+        let manager = Arc::new(UpscaleManager::new(engine.clone()));
+        manager.start_all(None, UpscaleMode::Fast, None).unwrap();
+        let status = wait_finished(&manager);
+        assert_eq!(
+            status.total, 61,
+            "All did not snapshot originals: {status:?}"
+        );
+        assert_eq!(status.processed, 61);
+        assert_eq!(status.completed, 61);
+        assert_eq!(status.failed, 0);
+        assert!(status.results.len() <= 20);
+        let source = status.source.unwrap();
+        assert!(!source.enabled);
+        assert!(source.name.contains("originals") && source.name.contains("Fast"));
+        let metadata: serde_json::Value = serde_json::from_slice(
+            &fs::read(Path::new(&source.location).join("collection.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(metadata["name"], source.name);
+        assert_eq!(
+            fs::read_dir(&source.location)
+                .unwrap()
+                .filter_map(Result::ok)
+                .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "jpg"))
+                .count(),
+            61
+        );
+        assert_eq!(engine.snapshot().unwrap().sources.len(), 3);
+        assert_eq!(
+            manager.save(status.job_id.as_deref().unwrap()).unwrap().id,
+            source.id
+        );
+    }
+
+    #[test]
+    fn cancellation_keeps_already_published_outputs_and_save_is_idempotent() {
+        let temp = tempfile::tempdir().unwrap();
+        let engine = Arc::new(
+            Engine::new(
+                crate::storage::Store::new(temp.path().join("data"), temp.path().join("cache"))
+                    .unwrap(),
+            )
+            .unwrap(),
+        );
+        let manager = UpscaleManager::new(engine.clone());
+        let directory = engine
+            .store
+            .root
+            .join("upscaled/0123456789abcdef0123456789abcdef");
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(directory.join("001.jpg"), b"completed").unwrap();
+        let source = engine.accept_upscale_source(&directory, 0).unwrap();
+        {
+            let mut state = manager.inner.lock().unwrap();
+            state.status.job_id = Some("0123456789abcdef0123456789abcdef".into());
+            state.status.completed = 1;
+            state.status.phase = Phase::Processing;
+            state.status.source = Some(source.clone());
+            state.saved = Some(source.clone());
+        }
+        let status = manager.cancel(None).unwrap();
+        assert_eq!(status.phase, Phase::Cancelled);
+        assert_eq!(status.completed, 1);
+        assert!(directory.join("001.jpg").is_file());
+        assert_eq!(
+            manager.save(status.job_id.as_deref().unwrap()).unwrap().id,
+            source.id
+        );
+    }
+
+    fn wait_finished(manager: &UpscaleManager) -> UpscaleStatus {
+        let deadline = Instant::now() + Duration::from_secs(90);
+        loop {
+            let status = manager.status().unwrap();
+            assert_eq!(
+                status.processed,
+                status.completed + status.failed,
+                "Unfinished work was counted as processed: {status:?}"
+            );
+            if matches!(status.phase, Phase::Ready | Phase::Error | Phase::Cancelled)
+                && !manager.inner.lock().unwrap().running
+            {
+                return status;
+            }
+            assert!(Instant::now() < deadline, "Worker timed out: {status:?}");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
 
     #[test]
     fn rejects_unknown_modes() {

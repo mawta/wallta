@@ -2,8 +2,8 @@
 
 ## Cài đặt
 
-- Windows 10/11 x64: mở bộ cài `Wallta_0.1.6_x64-setup.exe`. Windows có thể cảnh báo nhà phát hành chưa xác định vì chưa ký Authenticode.
-- Android/Android TV 8+: cho phép cài từ nguồn đang dùng rồi mở `Wallta_0.1.6_android.apk`. Nếu đã cài APK debug cũ, có thể phải gỡ trước vì khác khóa ký. Gỡ app xóa cấu hình và ảnh đã nhập vào app; sao lưu ảnh cần giữ trước.
+- Windows 10/11 x64: mở bộ cài `Wallta_0.1.7_x64-setup.exe`. Windows có thể cảnh báo nhà phát hành chưa xác định vì chưa ký Authenticode.
+- Android/Android TV 8+: cho phép cài từ nguồn đang dùng rồi mở `Wallta_0.1.7_android.apk`. Nếu đã cài APK debug cũ, có thể phải gỡ trước vì khác khóa ký. Gỡ app xóa cấu hình và ảnh đã nhập vào app; sao lưu ảnh cần giữ trước.
 - Tải bộ cài tại GitHub Releases công khai, không cần đăng nhập. Không cần tài khoản Wallta.
 
 Từ 0.1.2, mở **Cài đặt → Cập nhật** để kiểm tra, tải và cài bản mới. App tự kiểm tra tối đa mỗi ngày khi mở. [Chi tiết cập nhật](updating.md).
@@ -21,7 +21,7 @@ Android đổi wallpaper nền tối thiểu 15 phút và có thể trễ do Doz
 
 Trong **Nguồn ảnh → Chỉnh sửa**, chọn thêm hoặc bỏ từng thư mục rồi lưu. Hỗ trợ nhiều thư mục local, Drive và WebDAV; Drive riêng qua relay Android/TV giữ giới hạn thư mục đã ghép quyền.
 
-Bấm **4K** trên ảnh hoặc **Nguồn ảnh → Nâng ảnh 4K**. Chọn **Nhanh** trên Windows/Android/TV, hoặc **AI** trên Windows có GPU hỗ trợ Vulkan. Xem trước–sau, rồi **Lưu ảnh 4K** để tạo bộ ảnh riêng; ảnh gốc giữ nguyên. [Cách dùng và giới hạn](upscaling.md).
+Bấm **4K** trên ảnh hoặc **Nguồn ảnh → Nâng ảnh 4K**. Chọn **Nhanh** trên Windows/Android/TV, hoặc **AI** trên Windows có GPU hỗ trợ Vulkan. Chọn nguồn và **Chạy tất cả**, hoặc chọn từng ảnh. Ảnh hoàn thành tự lưu thành bộ ảnh riêng; ảnh gốc giữ nguyên. [Cách dùng và giới hạn](upscaling.md).
 
 ## Screensaver trên TV
 

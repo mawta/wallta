@@ -72,9 +72,54 @@ pub(crate) fn check_operation(
     Ok(())
 }
 
+pub(crate) fn collection_label(scope: &str, model: Option<&str>, when: &str) -> String {
+    let mut clean = String::new();
+    for character in scope
+        .trim()
+        .chars()
+        .filter(|character| !character.is_control())
+    {
+        if clean.len() + character.len_utf8() > 48 {
+            break;
+        }
+        clean.push(character);
+    }
+    let scope = if clean.trim().is_empty() {
+        "Tất cả nguồn"
+    } else {
+        clean.trim()
+    };
+    let model = match model {
+        Some("photo") => "Photo",
+        Some("anime") => "Anime",
+        Some("anime-light") => "Anime Light",
+        _ => "Fast",
+    };
+    format!("Ảnh 4K · {scope} · {model} · {when}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn collection_names_distinguish_original_source_model_and_date() {
+        let when = "2026-10-30 12:34:56";
+        let photo = collection_label("Du lịch", Some("photo"), when);
+        let anime = collection_label("Du lịch", Some("anime"), when);
+        let fast = collection_label("Gia đình", None, when);
+        assert!(photo.contains("Du lịch") && photo.contains("Photo") && photo.contains(when));
+        assert!(anime.contains("Anime"));
+        assert!(fast.contains("Gia đình") && fast.contains("Fast"));
+        assert_ne!(photo, anime);
+        assert_ne!(fast, photo);
+        assert!(
+            collection_label("Tất cả nguồn", Some("anime-light"), when).contains("Tất cả nguồn")
+        );
+        let bounded = collection_label(&"\nDu lịch\t".repeat(100), Some("photo"), when);
+        assert!(bounded.len() <= 128);
+        assert!(!bounded.chars().any(char::is_control));
+    }
 
     #[test]
     fn four_k_box_preserves_landscape_portrait_and_square_aspect() {

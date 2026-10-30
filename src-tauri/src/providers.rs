@@ -359,6 +359,13 @@ fn list_webdav(source: &Source) -> Result<Vec<MediaItem>, String> {
 }
 
 fn local_list(source: &Source) -> Result<Vec<MediaItem>, String> {
+    local_list_excluding(source, &[])
+}
+
+fn local_list_excluding(
+    source: &Source,
+    excluded: &[std::path::PathBuf],
+) -> Result<Vec<MediaItem>, String> {
     use std::{collections::VecDeque, time::Instant};
     let deadline = Instant::now() + Duration::from_secs(60);
     let mut pending = VecDeque::new();
@@ -368,7 +375,7 @@ fn local_list(source: &Source) -> Result<Vec<MediaItem>, String> {
         let canonical = path.canonicalize().map_err(|_| {
             "Cannot read the local folder. Pick it again or check permissions.".to_string()
         })?;
-        if visited.insert(canonical) {
+        if !excluded.iter().any(|root| canonical.starts_with(root)) && visited.insert(canonical) {
             pending.push_back((path.to_path_buf(), 0usize));
         }
     }
@@ -391,6 +398,9 @@ fn local_list(source: &Source) -> Result<Vec<MediaItem>, String> {
             }
             if kind.is_dir() && source.recursive {
                 let canonical = entry.path().canonicalize().map_err(|e| e.to_string())?;
+                if excluded.iter().any(|root| canonical.starts_with(root)) {
+                    continue;
+                }
                 if !visited.contains(&canonical) {
                     if depth >= 16 || visited.len() >= 1000 {
                         return Err("Local recursion is limited to 16 levels and 1000 folders. Choose smaller folders.".into());
@@ -418,12 +428,20 @@ fn local_list(source: &Source) -> Result<Vec<MediaItem>, String> {
 }
 
 pub fn list_source(client: &Client, source: &Source) -> Result<Vec<MediaItem>, String> {
+    list_source_excluding(client, source, &[])
+}
+
+pub(crate) fn list_source_excluding(
+    client: &Client,
+    source: &Source,
+    excluded: &[std::path::PathBuf],
+) -> Result<Vec<MediaItem>, String> {
     let mut validated = source.clone();
     validated.validate_folders()?;
     let resolved = crate::google::authorize_source(&validated)?;
     let source = &resolved;
     match source.kind.as_str() {
-        "local" => local_list(source),
+        "local" => local_list_excluding(source, excluded),
         "url" => Ok(vec![item(
             network_url(&source.location)?.into(),
             None,
@@ -716,6 +734,26 @@ pub fn download(client: &Client, media: &MediaItem, source: &Source) -> Result<V
 #[cfg(test)]
 mod webdav_tests {
     use super::*;
+
+    #[test]
+    fn managed_subtree_is_excluded_before_local_recursion_limits() {
+        let root = tempfile::tempdir().unwrap();
+        let managed = root.path().join("upscaled");
+        fs::create_dir_all(&managed).unwrap();
+        for index in 0..1001 {
+            fs::create_dir(managed.join(index.to_string())).unwrap();
+        }
+        let originals = root.path().join("originals");
+        fs::create_dir(&originals).unwrap();
+        fs::write(originals.join("photo.png"), b"original").unwrap();
+        let source: Source = serde_json::from_value(serde_json::json!({
+            "id":"originals", "name":"Originals", "kind":"local", "location":root.path(), "recursive":true
+        })).unwrap();
+        assert!(local_list(&source).is_err());
+        let items = local_list_excluding(&source, &[managed.canonicalize().unwrap()]).unwrap();
+        assert_eq!(items.len(), 1);
+        assert!(Path::new(&items[0].url).starts_with(&originals));
+    }
 
     fn source() -> Source {
         serde_json::from_value(serde_json::json!({"id":"dav", "name":"DAV", "kind":"webdav", "location":"https://dav.test/photos", "recursive":true, "enabled":true})).unwrap()

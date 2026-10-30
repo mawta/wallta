@@ -1,0 +1,11 @@
+// @vitest-environment jsdom
+import {act} from 'react';import{createRoot}from'react-dom/client';import{afterEach,beforeEach,expect,it,vi}from'vitest';
+import{UpscaleProgress}from'./UpscaleProgress';
+let root:ReturnType<typeof createRoot>;let host:HTMLDivElement;
+const status={jobId:'job',phase:'processing',mode:'ai',model:'anime',completed:10,processed:12,failed:2,total:75,downloadedBytes:0,totalDownloadBytes:0,results:[]};
+let controller:any;
+beforeEach(()=>{Object.assign(globalThis,{IS_REACT_ACT_ENVIRONMENT:true});host=document.createElement('div');root=createRoot(host);controller={status,active:true,busy:false,error:'',cancel:vi.fn(),apply:vi.fn(),dismiss:vi.fn(),models:[{id:'anime',name:'Anime'}]};});
+afterEach(async()=>{await act(async()=>root.unmount());});
+it('shows one bar for all work and calls explicit cancel',async()=>{await act(async()=>root.render(<UpscaleProgress controller={controller} onResults={()=>{}}/>));expect(host.querySelectorAll('progress')).toHaveLength(1);expect(host.querySelector('progress')?.value).toBe(12);expect(host.textContent).toContain('12/75');expect(host.textContent).toContain('2 lỗi');await act(async()=>[...host.querySelectorAll('button')].find(b=>b.textContent==='Hủy')!.click());expect(controller.cancel).toHaveBeenCalledOnce();});
+it('uses bytes during download rather than pretending images are processing',async()=>{controller.status={...status,phase:'downloading',downloadedBytes:2000000,totalDownloadBytes:8973790};await act(async()=>root.render(<UpscaleProgress controller={controller} onResults={()=>{}}/>));expect(host.querySelector('progress')?.max).toBe(8973790);expect(host.querySelector('progress')?.value).toBe(2000000);expect(host.textContent).toContain('2.00 MB / 8.97 MB');});
+it('exposes saved partial output on errors',async()=>{const open=vi.fn();controller.active=false;controller.status={...status,phase:'error',source:{id:'saved'},results:[{id:'preview'}],error:'No space'};await act(async()=>root.render(<UpscaleProgress controller={controller} onResults={open}/>));expect(host.textContent).toContain('Đã lưu 10');await act(async()=>[...host.querySelectorAll('button')].find(b=>b.textContent==='Xem ảnh')!.click());expect(open).toHaveBeenCalledOnce();});

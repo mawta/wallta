@@ -113,6 +113,20 @@ class StateStore(private val context: Context) {
         root.put("cacheEpoch", JSONObject().put("value", (root.optJSONObject("cacheEpoch")?.optLong("value") ?: 0L) + 1))
     }
     fun revision(): Long = synchronized(lock) { read().optLong("revision") }
+    /** Fresh-root deletion cannot be undone by save() preserving the old current image. */
+    fun removeUpscaleCollection(location: String) = synchronized(lock) {
+        val root = read(); val state = root.optJSONObject("state") ?: defaults()
+        val sources = state.getJSONArray("sources"); val kept = JSONArray(); val removed = mutableSetOf<String>()
+        for (i in 0 until sources.length()) {
+            val source = sources.getJSONObject(i)
+            if (source.optString("kind") == "local" && source.optString("location") == location) removed += source.getString("id") else kept.put(source)
+        }
+        removed.forEach { id -> invalidateOwnedCache(root, id); root.remove("import:$id"); root.remove("importPending:$id") }
+        if (state.optJSONObject("current")?.optString("sourceId") in removed) state.put("current", JSONObject.NULL).put("running", false)
+        state.put("sources", kept)
+        root.put("state", state).put("revision", root.optLong("revision") + 1)
+        write(root)
+    }
     fun invalidateCache() = synchronized(lock) {
         val root = read(); root.put("revision", root.optLong("revision") + 1)
         root.put("cacheEpoch", JSONObject().put("value", (root.optJSONObject("cacheEpoch")?.optLong("value") ?: 0L) + 1)); write(root)
