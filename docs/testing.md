@@ -2,6 +2,17 @@
 
 Đối chiếu mã nguồn và bằng chứng thực thi; CI build không thay thế kiểm tra trên thiết bị. Windows chưa ký Authenticode; APK từ 0.1.2 dùng khóa phát hành cố định.
 
+## Bổ sung trong 0.1.8
+
+- React: **94 tests** và production build đạt; ngôn ngữ thiết bị, chọn/nhớ ngôn ngữ, storage bị chặn, đổi ngay khi form đang mở, giữ tên nguồn, template lỗi native và giữ chẩn đoán chưa biết.
+- Trang LAN: mặc định Anh/Việt theo trình duyệt, chọn ngôn ngữ riêng; chuyển ngôn ngữ trong lúc retry không gửi lại ảnh đã thành công, giữ tên file và token URL.
+- Windows: **152 Rust tests** và NSIS build đạt. Android: **111 tests** trên Linux, không lỗi/bỏ qua, APK build đạt.
+- Công cụ phát hành: **12 tests**, phiên bản 0.1.8/versionCode 9, privacy và diff check đạt.
+- Trình duyệt: desktop/390px Anh–Việt, nhớ lựa chọn sau reload, form Drive tiếng Anh không tràn ngang, không có console error. Spec/quality review không còn lỗi quan trọng.
+
+[Windows CI](https://github.com/mawta/wallta/actions/runs/41038165869) · [Android CI](https://github.com/mawta/wallta/actions/runs/41038166043) · [Phát hành có chữ ký](https://github.com/mawta/wallta/actions/runs/41038816691) · [Bộ cài và checksum](artifacts.md). Chưa chạy lại cài/nâng cấp, wallpaper/reboot và OAuth có credential trên thiết bị thật cho bản giao diện này. Hộp thoại hệ thống, trang bên thứ ba, lỗi chưa biết và tên bộ ảnh đã tạo có thể giữ ngôn ngữ ban đầu.
+
+
 ## Bổ sung trong 0.1.7
 
 - React: **77 tests** và production build đạt; kiểm tra desktop/390px, chọn model, chạy tất cả, điều hướng và một thanh tiến trình dưới cùng bằng native bridge giả lập, không có lỗi console.
