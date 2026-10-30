@@ -201,6 +201,39 @@ impl Engine {
         }
         Ok(items)
     }
+    /// Capture the original source label against the same revision as the worker's items.
+    pub(crate) fn upscale_scope_name(
+        &self,
+        ids: &[String],
+        selected: Option<&[MediaItem]>,
+        expected: u64,
+    ) -> Result<String, String> {
+        let (snapshot, revision) = self.operation_snapshot()?;
+        if revision != expected {
+            return Err("Sources changed during processing. Start a new job.".into());
+        }
+        let source_ids: HashSet<&str> = match selected {
+            Some(items) => items.iter().map(|media| media.source_id.as_str()).collect(),
+            None => snapshot
+                .media
+                .iter()
+                .chain(snapshot.state.current.iter())
+                .filter(|media| ids.contains(&media.id))
+                .map(|media| media.source_id.as_str())
+                .collect(),
+        };
+        if source_ids.len() == 1 {
+            if let Some(source) = snapshot
+                .state
+                .sources
+                .iter()
+                .find(|source| source.enabled && source_ids.contains(source.id.as_str()))
+            {
+                return Ok(source.name.clone());
+            }
+        }
+        Ok("Tất cả nguồn".into())
+    }
     /// Read a snapshot item after revalidating its source, without depending on a refreshed UI catalog.
     pub(crate) fn upscale_snapshot_input(
         &self,
@@ -237,7 +270,7 @@ impl Engine {
         path: &std::path::Path,
         expected_revision: u64,
     ) -> Result<Source, String> {
-        self.publish_upscale_source(path, expected_revision, false)
+        self.publish_upscale_source(path, expected_revision, false, "Ảnh 4K")
             .map(|(source, _)| source)
     }
     pub(crate) fn accept_upscale_source_with_revision(
@@ -245,16 +278,28 @@ impl Engine {
         path: &std::path::Path,
         expected_revision: u64,
     ) -> Result<(Source, u64), String> {
-        self.publish_upscale_source(path, expected_revision, true)
+        self.publish_upscale_source(path, expected_revision, true, "Ảnh 4K")
+    }
+    pub(crate) fn accept_upscale_source_named(
+        &self,
+        path: &std::path::Path,
+        expected_revision: u64,
+        name: &str,
+    ) -> Result<(Source, u64), String> {
+        self.publish_upscale_source(path, expected_revision, true, name)
     }
     fn publish_upscale_source(
         &self,
         path: &std::path::Path,
         expected_revision: u64,
         strict: bool,
+        name: &str,
     ) -> Result<(Source, u64), String> {
         let mut runtime = self.inner.lock().map_err(|error| error.to_string())?;
         self.mutation_gate.ensure_open()?;
+        if name.trim().is_empty() || name.len() > 128 || name.chars().any(char::is_control) {
+            return Err("Invalid managed collection name.".into());
+        }
         if strict && self.revision.load(Ordering::SeqCst) != expected_revision {
             return Err("Sources changed during processing. Start a new job.".into());
         }
@@ -310,7 +355,7 @@ impl Engine {
         }
         let source = Source {
             id: format!("upscale-{:032x}", rand::random::<u128>()),
-            name: "Ảnh 4K".into(),
+            name: name.into(),
             kind: "local".into(),
             location: canonical.to_string_lossy().into_owned(),
             folders: vec![],
@@ -1316,6 +1361,42 @@ mod lan_engine_tests;
 #[cfg(test)]
 mod upscale_engine_tests {
     use super::*;
+
+    #[test]
+    fn collection_name_uses_original_snapshot_and_remains_idempotent() {
+        let (root, engine, media) = fixture();
+        let scope = engine
+            .upscale_scope_name(
+                std::slice::from_ref(&media.id),
+                Some(std::slice::from_ref(&media)),
+                0,
+            )
+            .unwrap();
+        assert_eq!(scope, "Original");
+        let mut second = media.clone();
+        second.source_id = "another-source".into();
+        assert_eq!(
+            engine
+                .upscale_scope_name(&[], Some(&[media.clone(), second]), 0)
+                .unwrap(),
+            "Tất cả nguồn"
+        );
+        let path = result_folder(root.path());
+        let label = "Ảnh 4K · Original · Photo · 2026-10-30 12:34:56";
+        let (saved, own_revision) = engine.accept_upscale_source_named(&path, 0, label).unwrap();
+        assert_eq!(saved.name, label);
+        assert_eq!(engine.accept_upscale_source(&path, 0).unwrap().name, label);
+        let again = engine
+            .accept_upscale_source_named(&path, own_revision, "Another label")
+            .unwrap()
+            .0;
+        assert_eq!(again.id, saved.id);
+        assert_eq!(again.name, label);
+        assert!(
+            engine.upscale_scope_name(&[media.id], None, 0).is_err(),
+            "External revisions cannot be rebased to obtain a label"
+        );
+    }
 
     #[test]
     fn all_ignores_missing_managed_sources_instead_of_aborting_originals() {

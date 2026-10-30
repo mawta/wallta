@@ -516,11 +516,23 @@ impl UpscaleManager {
         fs::create_dir_all(&cache).map_err(|e| e.to_string())?;
         prune_results(&cache, CACHE_BUDGET)?;
         let mut ai_runtime = None;
+        let created = chrono::Utc::now();
+        let scope = self
+            .engine
+            .upscale_scope_name(&ids, all.as_deref(), revision)?;
+        let name = policy::collection_label(
+            &scope,
+            (mode == UpscaleMode::Ai).then_some(model),
+            &created
+                .with_timezone(&chrono::Local)
+                .format("%Y-%m-%d %H:%M:%S")
+                .to_string(),
+        );
         let mut manifest = CollectionInfo {
             id: job.into(),
-            name: "Ảnh 4K".into(),
+            name,
             model: (mode == UpscaleMode::Ai).then(|| model.to_owned()),
-            created_at: Some(chrono::Utc::now().to_rfc3339()),
+            created_at: Some(created.to_rfc3339()),
             count: 0,
             bytes: 0,
             source_id: None,
@@ -606,9 +618,11 @@ impl UpscaleManager {
                         source
                     }
                     None => {
-                        let (source, own_revision) = self
-                            .engine
-                            .accept_upscale_source_with_revision(&collection, revision)?;
+                        let (source, own_revision) = self.engine.accept_upscale_source_named(
+                            &collection,
+                            revision,
+                            &manifest.name,
+                        )?;
                         // This revision comes from inside the publication lock; never load-and-rebase
                         // an unrelated external mutation after releasing the engine lock.
                         revision = own_revision;
@@ -1204,6 +1218,12 @@ mod tests {
         assert!(status.results.len() <= 20);
         let source = status.source.unwrap();
         assert!(!source.enabled);
+        assert!(source.name.contains("originals") && source.name.contains("Fast"));
+        let metadata: serde_json::Value = serde_json::from_slice(
+            &fs::read(Path::new(&source.location).join("collection.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(metadata["name"], source.name);
         assert_eq!(
             fs::read_dir(&source.location)
                 .unwrap()
