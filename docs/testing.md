@@ -2,6 +2,17 @@
 
 Đối chiếu mã nguồn và bằng chứng thực thi; CI build không thay thế kiểm tra trên thiết bị. Windows chưa ký Authenticode; APK từ 0.1.2 dùng khóa phát hành cố định.
 
+## Bổ sung trong 0.1.7
+
+- React: **77 tests** và production build đạt; kiểm tra desktop/390px, chọn model, chạy tất cả, điều hướng và một thanh tiến trình dưới cùng bằng native bridge giả lập, không có lỗi console.
+- Windows: **152 Rust tests**, NSIS build đạt; All vượt 50 ảnh, lưu tăng dần, hủy/lỗi giữ kết quả, lọc nguồn kết quả, tiến độ, phân loại lỗi runtime, xác minh model và giới hạn xóa trong vùng app sở hữu.
+- Android: **111 tests trên Linux**, không lỗi/bỏ qua; APK có chữ ký đạt. Local Windows có 4 test điều kiện nền tảng bỏ qua; Linux chạy đầy đủ. Bao gồm All 75 ảnh, 20 preview, revision, khóa trạng thái và giữ bộ ảnh legacy khi ngắt nguồn.
+- Công cụ phát hành: **12 tests**, phiên bản 0.1.7/versionCode 8 và kiểm tra loại trừ tài liệu nội bộ/credential đạt.
+- Tải lại đủ 5 asset công khai: SHA-256, chữ ký cập nhật Windows, APK signer/package/minSdk và 29 web asset đạt; manifest latest truy cập không đăng nhập trả về 0.1.7.
+- Ba model Photo/Anime/Anime Light đã chạy runtime chính thức trên Vulkan/Radeon RX 470, fixture **16×16 → 64×64**, exit 0. Asset công khai khớp byte/SHA-256 đã pin. Chưa đo chất lượng hoặc tốc độ xử lý ảnh thật 4K.
+
+[Windows CI](https://github.com/mawta/wallta/actions/runs/41015935942) · [Android CI](https://github.com/mawta/wallta/actions/runs/41015935937) · [Phát hành có chữ ký](https://github.com/mawta/wallta/actions/runs/41016491179) · [Bộ cài và checksum](artifacts.md). Chưa thử cài/nâng cấp và wallpaper/reboot trên thiết bị thật cho bản này; chạy runtime riêng không thay thế kiểm tra AI trong app đã cài. Không tự tiếp tục queue sau khi thoát app.
+
 ## Bổ sung trong 0.1.6
 
 - React: 64 tests và production build đạt, gồm hiển thị/xem trước/lưu các ảnh đã hoàn thành sau khi lô lỗi; không hiện nút lưu nếu chưa có ảnh hoàn thành.
