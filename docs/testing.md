@@ -2,6 +2,15 @@
 
 Đối chiếu mã nguồn và bằng chứng thực thi; CI build không thay thế kiểm tra trên thiết bị. Windows chưa ký Authenticode; APK từ 0.1.2 dùng khóa phát hành cố định.
 
+## Photo preview in 0.1.10
+
+- **170 Rust tests** (153 library and 17 behavior tests) and Windows installer build passed in [Windows CI](https://github.com/mawta/wallta/actions/runs/41377320684). Tests cover saved 4K bytes/dimensions, persisted original associations, disabled sources, legacy/missing originals, identity preservation, cache clearing during an in-flight request and collection deletion.
+- **122 Android tests**, zero failures or skips, and APK build passed in [Android CI](https://github.com/mawta/wallta/actions/runs/41377320657). Coverage includes bounded/EXIF-aware previews, reopen, Drive cleanup and pair retention under cache limits.
+- **107 frontend tests**, production build and **12 release-tool tests** passed. Real Chromium checks covered mouse dragging, touch emulation at 390×844, keyboard/TV D-pad focus, 100% zoom and panning, English/Vietnamese labels and legacy result-only viewing. Browser images were explicit comparison fixtures, not evidence of AI image quality.
+- Spec and independent code review passed. [Merged change](https://github.com/mawta/wallta/pull/8) · [Preview controls and original availability](photo-preview.md).
+
+Real TV remote/WebView behavior, live Google credentials, installation/upgrade and wallpaper application still require device acceptance. Very large originals are bounded for viewing; saved 4K JPEGs are served at their saved size. Existing collections without original associations support result-only preview.
+
 ## Bổ sung trong 0.1.9
 
 - Sửa bộ quét nguồn local trên Windows: tiền tố đường dẫn canonical `\\?\` được xử lý như đường dẫn file, không phải query URL. Các bộ ảnh upscale đã lưu được đọc lại sau khi cập nhật và làm mới thư viện, không cần xử lý ảnh lại.
