@@ -39,7 +39,7 @@
 @media(max-width:900px){.upscale-bottom{left:90px;right:16px;gap:12px}.upscale-bottom progress{order:3;flex-basis:100%}}
 @media(max-width:600px){.upscale-bottom{left:12px;right:12px;bottom:76px;padding:12px}.upscale-bottom-info{min-width:120px}.upscale-bottom-actions .button{font-size:11px;padding:8px 10px}.has-upscale-bar .main-content{padding-bottom:220px}.has-upscale-bar .toast{bottom:215px}}
 /* Full-size viewing uses the saved image; both comparison layers share one canvas. */
-.media-preview-button{display:block;width:100%;height:100%;padding:0;border:0;background:none;text-align:inherit;cursor:zoom-in;border-radius:inherit;overflow:hidden}
+.media-preview-button{display:block;width:100%;height:auto;aspect-ratio:1.5;padding:0;border:0;background:none;text-align:inherit;cursor:zoom-in;border-radius:inherit;overflow:hidden}
 .media-preview-button>img{display:block;width:100%;height:100%;object-fit:cover}
 .media-preview-button:focus-visible{outline:3px solid var(--accent);outline-offset:-3px}
 .upscale-comparison-slider{height:360px;background:#101412;border-radius:10px;overflow:hidden}

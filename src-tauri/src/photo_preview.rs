@@ -146,6 +146,21 @@ pub(crate) fn record_original(
     }
     storage::atomic_write(&collection.join("comparisons.json"), &bytes)
 }
+fn fresh_media(
+    items: Vec<MediaItem>,
+    id: &str,
+    source: &Source,
+    known: Option<&MediaItem>,
+) -> Option<MediaItem> {
+    // Old Photos entries hashed the expiring URL. Match only a trusted native
+    // provider ID, and always return the freshly authorized URL.
+    let legacy = known
+        .filter(|media| source.kind == "photos" && media.id == id && media.source_id == source.id);
+    items.into_iter().find(|media| {
+        media.source_id == source.id
+            && (media.id == id || legacy.is_some_and(|old| old.name == media.name))
+    })
+}
 fn resolve(
     context: &Context<'_>,
     id: &str,
@@ -175,10 +190,16 @@ fn resolve(
         .flatten();
     let media = match known {
         Some(media) => media,
-        None => providers::list_source(context.client, source)?
-            .into_iter()
-            .find(|media| media.id == id && media.source_id == source_id)
-            .ok_or("Photo is no longer in this source.")?,
+        None => fresh_media(
+            providers::list_source(context.client, source)?,
+            id,
+            source,
+            context
+                .known
+                .iter()
+                .find(|media| media.id == id && media.source_id == source_id),
+        )
+        .ok_or("Photo is no longer in this source.")?,
     };
     Ok((media, source.clone()))
 }
@@ -483,6 +504,33 @@ mod tests {
         let before = f.preview().before.unwrap();
         assert_eq!((before.width, before.height), (3840, 960));
         assert_eq!(image::image_dimensions(before.url).unwrap(), (3840, 960));
+    }
+    #[test]
+    fn legacy_photos_identity_uses_only_the_fresh_provider_url() {
+        let source: Source = serde_json::from_value(
+            serde_json::json!({"id":"photos","name":"Photos","kind":"photos","location":"device"}),
+        )
+        .unwrap();
+        let old = providers::item(
+            "https://old.test/expired?token=old".into(),
+            Some("provider-native-id".into()),
+            &source.id,
+        );
+        let mut fresh = providers::item(
+            "photos:provider-native-id".into(),
+            Some("provider-native-id".into()),
+            &source.id,
+        );
+        fresh.url = "https://fresh.test/current?token=new".into();
+        let resolved = fresh_media(vec![fresh.clone()], &old.id, &source, Some(&old)).unwrap();
+        assert_eq!(resolved.url, fresh.url);
+        assert!(fresh_media(vec![fresh.clone()], &old.id, &source, None).is_none());
+        let mut forged = old.clone();
+        forged.name = "different-native-id".into();
+        assert!(fresh_media(vec![fresh.clone()], &old.id, &source, Some(&forged)).is_none());
+        let mut foreign = old.clone();
+        foreign.source_id = "another-source".into();
+        assert!(fresh_media(vec![fresh], &old.id, &source, Some(&foreign)).is_none());
     }
     #[test]
     fn animated_formats_are_served_as_bounded_static_images() {

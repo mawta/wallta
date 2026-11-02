@@ -33,6 +33,7 @@ pub struct Runtime {
     pub wallpaper_path: Option<PathBuf>,
     pub media: Vec<MediaItem>,
     pub persistent: RuntimeState,
+    cache_epoch: u64,
 }
 impl Engine {
     /// Acquire only while holding the native state lock to await all prior saves.
@@ -459,6 +460,7 @@ impl Engine {
     pub(crate) fn clear_image_cache(&self) -> Result<(), String> {
         let mut runtime = self.inner.lock().map_err(|e| e.to_string())?;
         self.mutation_gate.ensure_open()?;
+        runtime.cache_epoch = runtime.cache_epoch.wrapping_add(1);
         for entry in fs::read_dir(&self.store.cache).map_err(|e| e.to_string())? {
             let entry = entry.map_err(|e| e.to_string())?;
             if runtime.wallpaper_path.as_deref() != Some(entry.path().as_path())
@@ -503,6 +505,7 @@ impl Engine {
                 wallpaper_path,
                 media: Vec::new(),
                 persistent,
+                cache_epoch: 0,
             }),
             store,
             client: providers::client()?,
@@ -925,6 +928,7 @@ impl Engine {
         let mut runtime = self.inner.lock().map_err(|e| e.to_string())?;
         self.mutation_gate.ensure_open()?;
         if self.revision.load(Ordering::SeqCst) != revision
+            || runtime.cache_epoch != snapshot.cache_epoch
             || prepared.images().any(|image| {
                 !runtime.state.sources.iter().any(|source| {
                     source.id == image.source.id
@@ -1308,6 +1312,38 @@ mod concurrency_tests {
         (dir, engine)
     }
 
+    #[test]
+    fn clearing_cache_cancels_an_inflight_photo_without_changing_worker_revision() {
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::RgbImage::new(2, 2)
+            .write_to(&mut png, image::ImageFormat::Png)
+            .unwrap();
+        let (url, started, release, server) = delayed_server(png.into_inner());
+        let (_dir, engine) = engine_for(url.clone(), "url");
+        let media = providers::item(url, None, "remote");
+        engine.inner.lock().unwrap().media.push(media.clone());
+        let revision = engine.revision.load(Ordering::SeqCst);
+        let worker_engine = engine.clone();
+        let preview =
+            thread::spawn(move || worker_engine.photo_preview(&media.id, &media.source_id));
+        started.recv_timeout(Duration::from_secs(5)).unwrap();
+        engine.clear_image_cache().unwrap();
+        assert_eq!(engine.revision.load(Ordering::SeqCst), revision);
+        release.send(()).unwrap();
+        server.join().unwrap();
+        assert!(
+            preview.join().unwrap().is_err(),
+            "An in-flight photo repopulated cleared cache"
+        );
+        assert_eq!(fs::read_dir(&engine.store.cache).unwrap().count(), 0);
+        assert!(engine
+            .inner
+            .lock()
+            .unwrap()
+            .persistent
+            .cache_owners
+            .is_empty());
+    }
     #[test]
     fn state_controls_remain_responsive_during_remote_listing() {
         let (url, started, release, server) = delayed_server(br#"["late.png"]"#.to_vec());
@@ -1825,6 +1861,11 @@ mod photo_preview_tests {
         let result = &status.results[0];
         let media_id = result.media_id.as_deref().unwrap();
         let source_id = result.source_id.as_deref().unwrap();
+        let published_items =
+            providers::list_source(&engine.client, status.source.as_ref().unwrap()).unwrap();
+        assert!(published_items
+            .iter()
+            .any(|item| item.id == media_id && item.source_id == source_id));
         let mut state = engine.snapshot().unwrap();
         for source in &mut state.sources {
             source.enabled = false;

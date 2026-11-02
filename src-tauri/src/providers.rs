@@ -423,12 +423,7 @@ fn local_list_excluding(
                 && files.insert(entry.path().canonicalize().map_err(|e| e.to_string())?)
             {
                 result.push(item(
-                    entry
-                        .path()
-                        .canonicalize()
-                        .map_err(|e| e.to_string())?
-                        .to_string_lossy()
-                        .into_owned(),
+                    entry.path().to_string_lossy().into_owned(),
                     Some(entry.file_name().to_string_lossy().into_owned()),
                     &source.id,
                 ));
@@ -799,7 +794,10 @@ mod webdav_tests {
         assert!(local_list(&source).is_err());
         let items = local_list_excluding(&source, &[managed.canonicalize().unwrap()]).unwrap();
         assert_eq!(items.len(), 1);
-        assert!(Path::new(&items[0].url).starts_with(originals.canonicalize().unwrap()));
+        assert!(Path::new(&items[0].url)
+            .canonicalize()
+            .unwrap()
+            .starts_with(originals.canonicalize().unwrap()));
     }
 
     fn source() -> Source {
@@ -1104,23 +1102,22 @@ mod webdav_tests {
 mod preview_identity_tests {
     use super::*;
     #[test]
-    fn local_ids_match_canonical_saved_output_paths() {
+    fn local_ids_preserve_the_selected_root_representation() {
         let temp = tempfile::tempdir().unwrap();
         fs::write(temp.path().join("photo.jpg"), b"image").unwrap();
-        let source: Source = serde_json::from_value(
-            serde_json::json!({"id":"local","name":"Local","kind":"local","location":temp.path()}),
-        )
-        .unwrap();
-        let media = list_source(&client().unwrap(), &source).unwrap().remove(0);
-        let canonical = temp
-            .path()
-            .join("photo.jpg")
-            .canonicalize()
-            .unwrap()
-            .to_string_lossy()
-            .into_owned();
-        assert_eq!(media.id, item(canonical.clone(), None, &source.id).id);
-        assert_eq!(media.url, canonical);
+        for location in [
+            temp.path().to_path_buf(),
+            temp.path().canonicalize().unwrap(),
+        ] {
+            let source: Source = serde_json::from_value(
+                serde_json::json!({"id":"local","name":"Local","kind":"local","location":location}),
+            )
+            .unwrap();
+            let media = list_source(&client().unwrap(), &source).unwrap().remove(0);
+            let expected = location.join("photo.jpg").to_string_lossy().into_owned();
+            assert_eq!(media.url, expected);
+            assert_eq!(media.id, item(expected, None, &source.id).id);
+        }
     }
 }
 
