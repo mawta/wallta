@@ -7,7 +7,7 @@ import { localeStore } from './lib/i18n';
 import { callNative } from './lib/native';
 import { emptyState } from './lib/types';
 
-vi.mock('./lib/native', () => ({ isNative: () => true, isAndroid: () => false, isDesktop: () => true, callNative: vi.fn(), registerPreviewFiles: vi.fn(), errorMessage: (error: unknown) => String(error) }));
+vi.mock('./lib/native', () => ({ isNative: () => true, isAndroid: () => false, isDesktop: () => true, imageUrl: (url: string) => url, callNative: vi.fn(), registerPreviewFiles: vi.fn(), errorMessage: (error: unknown) => String(error) }));
 vi.mock('./lib/useUpdates', () => ({ useUpdates: () => ({ status: { phase: 'idle', currentVersion: '0.1.8', downloadedBytes: 0 }, pending: false }) }));
 let host: HTMLDivElement, root: ReturnType<typeof createRoot>;
 beforeEach(() => {
@@ -63,4 +63,20 @@ it('follows device changes in system mode while leaving an open form intact', as
   expect(name.value).toBe(originalValue);
   expect(form.textContent).toContain('Lưu');
   language.mockRestore();
+});
+
+it('opens a library photo in a full-sized native preview without starting the slideshow', async () => {
+  const previous=vi.mocked(callNative).getMockImplementation()!;
+  vi.mocked(callNative).mockImplementation(async (command,args)=>{
+    if(command==='list_media')return [{id:'photo',sourceId:'user',name:'Landscape',url:'/native/photo.jpg'}] as never;
+    if(command==='get_preview')return '/cache/thumb.jpg' as never;
+    if(command==='get_photo_preview')return {url:'/cache/full.jpg',width:3840,height:2160} as never;
+    return previous(command,args);
+  });
+  await act(async()=>root.render(<App/>));await click('Sources');
+  await click('Preview Landscape');
+  expect(callNative).toHaveBeenCalledWith('get_photo_preview',{id:'photo',sourceId:'user'});
+  expect(host.querySelector('dialog[aria-label="Photo preview"]')).not.toBeNull();
+  expect(host.querySelector('img[src="/cache/full.jpg"]')).not.toBeNull();
+  expect(host.querySelector('.slideshow')).toBeNull();
 });

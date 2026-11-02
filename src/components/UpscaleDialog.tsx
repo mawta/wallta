@@ -1,12 +1,13 @@
 import { t } from '../lib/i18n';
 import { useEffect, useRef, useState } from 'react';
+import { ImageComparison } from './ImageComparison';
 import { X } from 'lucide-react';
 import { callNative, imageUrl, isNative } from '../lib/native';
 import type { Capabilities, MediaItem, Source } from '../lib/types';
 import { formatBytes, type ModelId, type UpscaleController, type UpscaleMode, type UpscaleStorage } from '../lib/upscale';
 
-interface Props {platform:Capabilities['platform'];sources:Source[];media:MediaItem[];initialIds?:string[];controller:UpscaleController;onClose:()=>void}
-export function UpscaleDialog({platform,sources,media,initialIds=[],controller,onClose}:Props){
+interface Props {platform:Capabilities['platform'];sources:Source[];media:MediaItem[];initialIds?:string[];controller:UpscaleController;onClose:()=>void;onPreview?:(item:MediaItem)=>void}
+export function UpscaleDialog({platform,sources,media,initialIds=[],controller,onClose,onPreview}:Props){
  const dialog=useRef<HTMLDialogElement>(null);const [mode,setMode]=useState<UpscaleMode>('fast');const [model,setModel]=useState<ModelId>('photo');
  const [sourceId,setSourceId]=useState('');const [selected,setSelected]=useState(initialIds.filter(id=>media.some(item=>item.id===id)).slice(0,50));
  const [apply,setApply]=useState(false);const [resultIndex,setResultIndex]=useState(0);const [showResults,setShowResults]=useState(controller.status.results.length>0);
@@ -22,7 +23,8 @@ export function UpscaleDialog({platform,sources,media,initialIds=[],controller,o
   <div className="dialog-heading"><h2 id="upscale-title">{t("Nâng ảnh 4K")}</h2><button className="icon-button" aria-label={t("Đóng")} onClick={onClose}><X size={20}/></button></div>
   {active?<p className="muted small">{t("Đang chạy. Tiến trình ở cuối cửa sổ.")}</p>:showResults&&result?<>
    {status.results.length>1&&<label className="field">{t("Ảnh kết quả")}<select value={resultIndex} onChange={event=>setResultIndex(Number(event.target.value))}>{status.results.map((item,index)=><option key={item.id} value={index}>{item.name}</option>)}</select></label>}
-   <div className="upscale-comparison"><figure><img src={imageUrl(result.originalPreview)} alt={t("Trước")}/><figcaption>{t("Trước")}</figcaption></figure><figure><img src={imageUrl(result.resultPreview)} alt={t("Sau")}/><figcaption>{t("Sau ·")} {result.width} {t("×")} {result.height}</figcaption></figure></div>
+   <div className="upscale-comparison-slider"><ImageComparison key={result.id} beforeUrl={imageUrl(result.originalPreview)} afterUrl={imageUrl(result.resultPreview)} width={result.width} height={result.height}/></div><p className="muted small">{t("Sau ·")} {result.width} × {result.height}</p>
+   {result.mediaId&&result.sourceId&&onPreview&&<button className="button secondary" onClick={()=>onPreview({id:result.mediaId!,sourceId:result.sourceId!,name:result.name,url:result.resultPreview})}>{t("Xem ảnh")}</button>}
    <p className="muted small">{t("Đã lưu")} {status.completed} {t("ảnh")}{status.failed?t(" · {0} ảnh lỗi", { 0: status.failed }):''}{status.source?` · ${status.source.name}`:''}</p>
    <div className="dialog-footer"><button className="button secondary" onClick={()=>setShowResults(false)}>{t("Chạy bộ khác")}</button>{status.source&&<button className="button primary" disabled={busy} onClick={()=>void controller.apply()}>{t("Áp dụng")}</button>}</div>
   </>:<>

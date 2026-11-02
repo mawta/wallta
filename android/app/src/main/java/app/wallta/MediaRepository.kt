@@ -15,7 +15,7 @@ import java.io.StringReader
 import java.net.URI
 
 class MediaRepository(private val context: Context, private val store: StateStore = StateStore(context)) {
-    private val dir = File(context.cacheDir, "media").apply { mkdirs() }
+    private val dir = File(context.cacheDir.canonicalFile, "media").apply { mkdirs() }
     /** Resolve only original enabled local media; never export a remote image or a cached derivative. */
     fun lanExports(ids: List<String>): List<LanTransferServer.Export> {
         require(ids.size <= 50 && ids.distinct().size == ids.size && ids.all { it.matches(Regex("[a-f0-9]{64}")) }) { "Invalid local image selection" }
@@ -52,7 +52,7 @@ class MediaRepository(private val context: Context, private val store: StateStor
         val caps = cm.getNetworkCapabilities(cm.activeNetwork) ?: return false
         return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) && (!settings.optBoolean("wifiOnly") || caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI))
     }
-    fun list(force: Boolean = false, sourceIds: Set<String>? = null, originalOnly: Boolean = false, strict: Boolean = false): List<Media> {
+    fun list(force: Boolean = false, sourceIds: Set<String>? = null, originalOnly: Boolean = false, strict: Boolean = false, includeDisabled: Boolean = false): List<Media> {
         // A single generation owns the entire list operation, including later sources.
         val snapshot = synchronized(StateStore.lock) { Triple(store.state(), store.revision(), store.get("cacheEpoch")?.optLong("value") ?: 0L) }
         val state = snapshot.first; val revision = snapshot.second; val epoch = snapshot.third
@@ -68,7 +68,7 @@ class MediaRepository(private val context: Context, private val store: StateStor
         val result = mutableListOf<Media>(); val errors = mutableListOf<String>()
         for (i in 0 until sources.length()) {
             ensureCurrent()
-            val s = sources.getJSONObject(i); if (!s.optBoolean("enabled", true) || sourceIds != null && s.optString("id") !in sourceIds || originalOnly && UpscaleCollections(context, store).isManaged(s)) continue
+            val s = sources.getJSONObject(i); if (!includeDisabled && !s.optBoolean("enabled", true) || sourceIds != null && s.optString("id") !in sourceIds || originalOnly && UpscaleCollections(context, store).isManaged(s)) continue
             ensureCurrent(s)
             val id = s.getString("id"); val key = "catalog:$id"; val cached = store.get(key)
             val existing = cached?.optJSONArray("items")?.let { a -> (0 until a.length()).map { Media.from(a.getJSONObject(it)) } } ?: emptyList()
@@ -212,15 +212,50 @@ class MediaRepository(private val context: Context, private val store: StateStor
         roots.forEach { scan(it, 0) }; return items.values.toList()
     }
     fun cacheFile(id: String): File { require(id.matches(Regex("[a-f0-9]{64}"))); return File(dir, "$id.img") }
+    /** Explicit viewing may resolve a disabled source, without changing its rotation state. */
+    fun photoPreview(id: String, sourceId: String): JSONObject {
+        require(id.matches(Regex("[a-f0-9]{64}")) && sourceId.length in 1..128) { "Invalid photo selection" }
+        val snapshot = synchronized(StateStore.lock) { store.revision() to (store.get("cacheEpoch")?.optLong("value") ?: 0L) }
+        fun resolve(mediaId: String, source: String): Media = list(force = true, sourceIds = setOf(source), strict = true, includeDisabled = true)
+            .find { it.id == mediaId && it.sourceId == source } ?: error("Image no longer available")
+        // Trim once the pair is complete; resolving the original must not evict its output.
+        fun prepare(media: Media) = PhotoPreviewCache.prepare(context, store, media, image(media, includeDisabled = true, trimCache = false), snapshot)
+        val media = resolve(id, sourceId)
+        val result = prepare(media)
+        var beforeId: String? = null
+        val sources = store.state().getJSONArray("sources")
+        val source = (0 until sources.length()).map { sources.getJSONObject(it) }.find { it.optString("id") == sourceId } ?: error("Source removed")
+        val collections = UpscaleCollections(context, store)
+        if (collections.isManaged(source)) {
+            val before = runCatching {
+                val original = collections.original(media) ?: error("Original association unavailable")
+                val originalMedia = resolve(original.first, original.second)
+                val originalSource = store.state().getJSONArray("sources").let { a -> (0 until a.length()).map { a.getJSONObject(it) }.first { it.optString("id") == original.second } }
+                require(!collections.isManaged(originalSource)) { "Original association is not an original photo" }
+                prepare(originalMedia).also { beforeId = originalMedia.id }
+            }.getOrNull()
+            if (before != null) result.put("before", before) else result.put("comparisonUnavailable", true)
+        }
+        synchronized(StateStore.lock) {
+            check(!Thread.currentThread().isInterrupted && store.revision() == snapshot.first && (store.get("cacheEpoch")?.optLong("value") ?: 0L) == snapshot.second) { "Preview operation cancelled" }
+            val limit = store.state().getJSONObject("settings").optInt("cacheLimitMb", 256).toLong() * 1024 * 1024
+            val originalId = beforeId
+            if (originalId != null && cacheBytes(id) + cacheBytes(originalId) > limit) {
+                result.remove("before"); result.put("comparisonUnavailable", true); beforeId = null
+            }
+            trim(limit, id, setOfNotNull(beforeId))
+        }
+        return result
+    }
     fun visual(media: Media): File {
         val snapshot = synchronized(StateStore.lock) { store.revision() to (store.get("cacheEpoch")?.optLong("value") ?: 0L) }
         return VisualCache.prepare(context, store, media, image(media), snapshot)
     }
-    fun image(media: Media): File {
+    fun image(media: Media, includeDisabled: Boolean = false, trimCache: Boolean = true): File {
         val target = cacheFile(media.id)
         val state = store.state(); val revision = store.revision(); val cacheEpoch = store.get("cacheEpoch")?.optLong("value") ?: 0L
         val sources = state.getJSONArray("sources")
-        require((0 until sources.length()).any { sources.getJSONObject(it).optString("id") == media.sourceId && sources.getJSONObject(it).optBoolean("enabled", true) }) { "Source removed or disabled" }
+        require((0 until sources.length()).any { sources.getJSONObject(it).optString("id") == media.sourceId && (includeDisabled || sources.getJSONObject(it).optBoolean("enabled", true)) }) { "Source removed or disabled" }
         if (media.photos) {
             require(networkAllowed(store.state().getJSONObject("settings"))) { "Google Photos cannot be displayed offline" }
             val manual = (0 until sources.length()).map { sources.getJSONObject(it) }.any { it.optString("id") == media.sourceId && it.optString("kind") == "photos" && it.optString("accessToken").isNotBlank() }
@@ -247,27 +282,29 @@ class MediaRepository(private val context: Context, private val store: StateStor
         require(bounds.outWidth > 0 && bounds.outHeight > 0 && bounds.outWidth.toLong() * bounds.outHeight <= 120_000_000) { "Invalid or oversized image" }
         synchronized(StateStore.lock) {
             check(!Thread.currentThread().isInterrupted && store.revision() == revision && (store.get("cacheEpoch")?.optLong("value") ?: 0L) == cacheEpoch) { "Image operation cancelled by newer state or cache clear" }
+            UpscaleFiles.root(dir, create = true)
             val temp = File.createTempFile("image-", ".tmp", dir)
             try { temp.writeBytes(bytes); require(temp.renameTo(target)) { "Cannot cache image" } } finally { temp.delete() }
-            VisualCache.file(context, media.id).delete()
+            VisualCache.file(context, media.id).delete(); PhotoPreviewCache.remove(context, media.id)
             val ledger = store.get("cacheOwners") ?: JSONObject(); ledger.put(media.id, JSONObject().put("source", media.sourceId).put("photos", media.photos).put("createdAt", System.currentTimeMillis())); store.put("cacheOwners", ledger)
         }
-        trim(state.getJSONObject("settings").optInt("cacheLimitMb", 256).toLong() * 1024 * 1024, media.id)
+        if (trimCache) trim(state.getJSONObject("settings").optInt("cacheLimitMb", 256).toLong() * 1024 * 1024, media.id)
         return target
     }
-    fun trim(limit: Long, keep: String = "") = synchronized(StateStore.lock) {
+    private fun cacheBytes(id: String) = cacheFile(id).length() + VisualCache.file(context, id).length() + PhotoPreviewCache.length(context, id)
+    fun trim(limit: Long, keep: String = "", alsoKeep: Set<String> = emptySet()) = synchronized(StateStore.lock) {
         val files = dir.listFiles()?.filter { it.extension == "img" }?.sortedBy { it.lastModified() } ?: emptyList()
-        var bytes = files.sumOf { it.length() + VisualCache.file(context, it.nameWithoutExtension).length() }; val ledger = store.get("cacheOwners") ?: JSONObject()
-        for (f in files) if (bytes > limit && f.nameWithoutExtension != keep) { val visual = VisualCache.file(context, f.nameWithoutExtension); bytes -= f.length() + visual.length(); f.delete(); visual.delete(); ledger.remove(f.nameWithoutExtension) }
+        var bytes = files.sumOf { cacheBytes(it.nameWithoutExtension) }; val ledger = store.get("cacheOwners") ?: JSONObject()
+        for (f in files) if (bytes > limit && f.nameWithoutExtension != keep && f.nameWithoutExtension !in alsoKeep) { val visual = VisualCache.file(context, f.nameWithoutExtension); bytes -= cacheBytes(f.nameWithoutExtension); f.delete(); visual.delete(); PhotoPreviewCache.remove(context, f.nameWithoutExtension); ledger.remove(f.nameWithoutExtension) }
         store.put("cacheOwners", ledger)
     }
     fun clearSource(source: String) = synchronized(StateStore.lock) {
         store.invalidateCache()
         val ledger = store.get("cacheOwners") ?: JSONObject()
-        ledger.keys().asSequence().toList().filter { ledger.getJSONObject(it).optString("source") == source }.forEach { cacheFile(it).delete(); VisualCache.file(context, it).delete(); ledger.remove(it) }
+        ledger.keys().asSequence().toList().filter { ledger.getJSONObject(it).optString("source") == source }.forEach { cacheFile(it).delete(); VisualCache.file(context, it).delete(); PhotoPreviewCache.remove(context, it); ledger.remove(it) }
         store.put("cacheOwners", ledger); store.put("catalog:$source", null)
     }
-    fun clear() = synchronized(StateStore.lock) { store.invalidateCache(); dir.listFiles()?.forEach { it.delete() }; File(context.cacheDir, "visual").listFiles()?.forEach { it.delete() }; store.put("cacheOwners", null) }
+    fun clear() = synchronized(StateStore.lock) { store.invalidateCache(); dir.listFiles()?.forEach { it.delete() }; File(context.cacheDir, "visual").listFiles()?.forEach { it.delete() }; File(context.cacheDir, "photo-preview").listFiles()?.forEach { it.delete() }; store.put("cacheOwners", null) }
     fun releaseUnusedGrants() {
         val a = store.state().getJSONArray("sources")
         val used = (0 until a.length()).map { a.getJSONObject(it) }.filter { it.optString("kind") == "local" }.flatMap { SourceFolders.locations(it) }.toSet()

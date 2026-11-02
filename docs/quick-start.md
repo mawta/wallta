@@ -2,8 +2,8 @@
 
 ## Cài đặt
 
-- Windows 10/11 x64: mở bộ cài `Wallta_0.1.9_x64-setup.exe`. Windows có thể cảnh báo nhà phát hành chưa xác định vì chưa ký Authenticode.
-- Android/Android TV 8+: cho phép cài từ nguồn đang dùng rồi mở `Wallta_0.1.9_android.apk`. Nếu đã cài APK debug cũ, có thể phải gỡ trước vì khác khóa ký. Gỡ app xóa cấu hình và ảnh đã nhập vào app; sao lưu ảnh cần giữ trước.
+- Windows 10/11 x64: mở bộ cài `Wallta_0.1.10_x64-setup.exe`. Windows có thể cảnh báo nhà phát hành chưa xác định vì chưa ký Authenticode.
+- Android/Android TV 8+: cho phép cài từ nguồn đang dùng rồi mở `Wallta_0.1.10_android.apk`. Nếu đã cài APK debug cũ, có thể phải gỡ trước vì khác khóa ký. Gỡ app xóa cấu hình và ảnh đã nhập vào app; sao lưu ảnh cần giữ trước.
 - Tải bộ cài tại GitHub Releases công khai, không cần đăng nhập. Không cần tài khoản Wallta.
 
 Từ 0.1.2, mở **Cài đặt → Cập nhật** để kiểm tra, tải và cài bản mới. App tự kiểm tra tối đa mỗi ngày khi mở. [Chi tiết cập nhật](updating.md).

@@ -670,11 +670,14 @@ fn list_photos(client: &Client, source: &Source) -> Result<Vec<MediaItem>, Strin
                     {
                         if let Some(base) = file.get("baseUrl").and_then(Value::as_str) {
                             network_url(base)?;
-                            result.push(item(
-                                format!("{base}=w3840-h2160"),
-                                media.get("id").and_then(Value::as_str).map(str::to_owned),
-                                &source.id,
-                            ));
+                            // Provider-owned stable identity survives temporary base URL refresh.
+                            if let Some(id) = media
+                                .get("id")
+                                .and_then(Value::as_str)
+                                .filter(|id| !id.is_empty())
+                            {
+                                result.push(photos_item(base, id, &source.id));
+                            }
                         }
                     }
                 }
@@ -769,7 +772,9 @@ mod webdav_tests {
         );
         assert!(listed.iter().all(|item| Path::new(&item.url).is_file()));
         assert!(is_image("https://example.com/photo.JPG?token=abc"));
-        assert!(!is_image("https://example.com/collection.json?name=photo.jpg"));
+        assert!(!is_image(
+            "https://example.com/collection.json?name=photo.jpg"
+        ));
     }
 
     #[test]
@@ -789,7 +794,10 @@ mod webdav_tests {
         assert!(local_list(&source).is_err());
         let items = local_list_excluding(&source, &[managed.canonicalize().unwrap()]).unwrap();
         assert_eq!(items.len(), 1);
-        assert!(Path::new(&items[0].url).starts_with(&originals));
+        assert!(Path::new(&items[0].url)
+            .canonicalize()
+            .unwrap()
+            .starts_with(originals.canonicalize().unwrap()));
     }
 
     fn source() -> Source {
@@ -1087,5 +1095,48 @@ mod webdav_tests {
         ))
         .unwrap_err()
         .contains("HTTPS"));
+    }
+}
+
+#[cfg(test)]
+mod preview_identity_tests {
+    use super::*;
+    #[test]
+    fn local_ids_preserve_the_selected_root_representation() {
+        let temp = tempfile::tempdir().unwrap();
+        fs::write(temp.path().join("photo.jpg"), b"image").unwrap();
+        for location in [
+            temp.path().to_path_buf(),
+            temp.path().canonicalize().unwrap(),
+        ] {
+            let source: Source = serde_json::from_value(
+                serde_json::json!({"id":"local","name":"Local","kind":"local","location":location}),
+            )
+            .unwrap();
+            let media = list_source(&client().unwrap(), &source).unwrap().remove(0);
+            let expected = location.join("photo.jpg").to_string_lossy().into_owned();
+            assert_eq!(media.url, expected);
+            assert_eq!(media.id, item(expected, None, &source.id).id);
+        }
+    }
+}
+
+fn photos_item(base: &str, media_id: &str, source_id: &str) -> MediaItem {
+    let mut media = item(
+        format!("photos:{media_id}"),
+        Some(media_id.into()),
+        source_id,
+    );
+    media.url = format!("{base}=w3840-h2160");
+    media
+}
+#[cfg(test)]
+mod photos_identity_tests {
+    #[test]
+    fn photo_identity_survives_temporary_url_refresh() {
+        let first = super::photos_item("https://photos.test/one?secret=a", "native-id", "source");
+        let next = super::photos_item("https://photos.test/two?secret=b", "native-id", "source");
+        assert_eq!(first.id, next.id);
+        assert_ne!(first.url, next.url);
     }
 }

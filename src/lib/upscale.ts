@@ -2,7 +2,7 @@ import type { Source } from './types';
 export type UpscaleMode = 'fast' | 'ai';
 export type ModelId = 'photo' | 'anime' | 'anime-light';
 export interface UpscaleModel { id:ModelId; name:string; description:string; bytes:number; installed:boolean; downloadBytes:number; runtimeBytes:number; runtimeInstalled:boolean }
-export interface UpscaleResult { id:string; name:string; width:number; height:number; originalPreview:string; resultPreview:string }
+export interface UpscaleResult { mediaId?:string; sourceId?:string; id:string; name:string; width:number; height:number; originalPreview:string; resultPreview:string }
 export interface UpscaleStatus {
  jobId:string|null; phase:'idle'|'downloading'|'processing'|'ready'|'cancelled'|'error'; mode:UpscaleMode; model?:ModelId|null;
  completed:number; processed:number; failed:number; total:number; downloadedBytes:number; totalDownloadBytes:number;

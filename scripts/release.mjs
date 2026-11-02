@@ -6,7 +6,7 @@ import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 
 export const repository = 'mawta/wallta';
-export const releaseNotes = 'Fix saved upscaled collections showing zero images on Windows. Local image scanning now supports canonical Windows paths. Existing collections and photos are preserved; refresh the library after updating.';
+export const releaseNotes = 'Large photo previews with fit and 100% viewing. Compare original and upscaled images in one aligned frame using a draggable Before/After divider, touch or keyboard/TV controls. New upscale results remember their original association after reopening. Older collections remain previewable without inventing missing originals.';
 const readJson = async path => JSON.parse(await readFile(path,'utf8'));
 const sha256 = data => createHash('sha256').update(data).digest('hex');
 const requireValue = (value,message) => { if (!value) throw new Error(message); return value; };

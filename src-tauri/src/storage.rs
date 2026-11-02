@@ -58,11 +58,18 @@ pub fn own_cache(runtime: &mut RuntimeState, media: &MediaItem, source: &Source)
 fn cache_id(id: &str) -> bool {
     id.len() == 64 && id.bytes().all(|c| c.is_ascii_hexdigit())
 }
+fn photo_cache_id(name: &str) -> Option<&str> {
+    let (id, extension) = name.split_once("-photo.")?;
+    (cache_id(id) && ["jpg", "png", "webp", "bmp", "gif"].contains(&extension)).then_some(id)
+}
 pub fn prune_cache_owners(runtime: &mut RuntimeState, cache: &Path) {
     runtime.cache_owners.retain(|id, _| {
         cache_id(id)
             && (cache.join(format!("{id}.img")).is_file()
-                || cache.join(format!("{id}-preview.png")).is_file())
+                || cache.join(format!("{id}-preview.png")).is_file()
+                || ["jpg", "png", "webp", "bmp", "gif"]
+                    .iter()
+                    .any(|extension| cache.join(format!("{id}-photo.{extension}")).is_file()))
     });
 }
 
@@ -148,7 +155,8 @@ pub fn reconcile_catalogs(runtime: &mut RuntimeState, sources: &[Source], cache:
             let name = name.to_string_lossy();
             let id = name
                 .strip_suffix(".img")
-                .or_else(|| name.strip_suffix("-preview.png"));
+                .or_else(|| name.strip_suffix("-preview.png"))
+                .or_else(|| photo_cache_id(&name));
             if !id.is_some_and(|id| runtime.cache_owners.contains_key(id))
                 && entry.file_type().is_ok_and(|kind| kind.is_file())
             {
@@ -408,5 +416,26 @@ mod google_identity_tests {
         assert!(runtime.catalogs.is_empty());
         assert!(runtime.cache_owners.is_empty());
         assert!(!file.exists());
+    }
+}
+
+#[cfg(test)]
+mod photo_cache_tests {
+    use super::*;
+    #[test]
+    fn photo_cache_ownership_survives_pruning_and_source_removal_purges_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let source:Source=serde_json::from_value(serde_json::json!({"id":"photo-source","name":"Photo","kind":"local","location":temp.path()})).unwrap();
+        let media = crate::providers::item("native-owned-photo".into(), None, &source.id);
+        let path = temp.path().join(format!("{}-photo.jpg", media.id));
+        fs::write(&path, b"cached").unwrap();
+        let mut runtime = RuntimeState::default();
+        own_cache(&mut runtime, &media, &source);
+        prune_cache_owners(&mut runtime, temp.path());
+        assert!(runtime.cache_owners.contains_key(&media.id));
+        reconcile_catalogs(&mut runtime, &[source], temp.path());
+        assert!(path.exists());
+        reconcile_catalogs(&mut runtime, &[], temp.path());
+        assert!(!path.exists());
     }
 }

@@ -107,6 +107,7 @@ class StateStore(private val context: Context) {
         ledger.keys().asSequence().toList().filter { ledger.getJSONObject(it).optString("source") == sourceId && it.matches(Regex("[a-f0-9]{64}")) }.forEach { mediaId ->
             File(File(context.cacheDir, "media"), "$mediaId.img").delete()
             File(File(context.cacheDir, "visual"), "$mediaId.jpg").delete()
+            PhotoPreviewCache.remove(context, mediaId)
             ledger.remove(mediaId)
         }
         root.put("cacheOwners", ledger); root.remove("catalog:$sourceId")
