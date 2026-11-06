@@ -1,0 +1,15 @@
+:root { color-scheme: dark; background: #111716; color: #f0f4eb; font: 16px/1.65 system-ui, sans-serif; }
+body { margin: 0 auto; max-width: 48rem; padding: 0 1.25rem; }
+header, footer, nav { display: flex; align-items: center; flex-wrap: wrap; gap: 1.25rem; }
+header { justify-content: space-between; padding: 1.25rem 0; border-bottom: 1px solid #39443e; }
+footer { padding: 1rem 0 2rem; border-top: 1px solid #39443e; }
+main { padding: 2.75rem 0; }
+h1, h2 { line-height: 1.2; }
+h1 { font-size: clamp(2rem, 6vw, 3.5rem); margin: 0 0 1rem; }
+h2 { margin-top: 2rem; }
+li + li { margin-top: .65rem; }
+a { color: #d9eda7; text-underline-offset: .2em; }
+.brand { display: inline-flex; align-items: center; gap: .6rem; color: inherit; font-size: 1.25rem; font-weight: 700; text-decoration: none; }
+.brand img { border-radius: .4rem; }
+.button { display: inline-block; background: #d9eda7; color: #111716; border-radius: .45rem; padding: .55rem .9rem; font-weight: 700; text-decoration: none; }
+:focus-visible { outline: 2px solid #fff; outline-offset: 4px; }
