@@ -2,6 +2,16 @@
 
 Đối chiếu mã nguồn và bằng chứng thực thi; CI build không thay thế kiểm tra trên thiết bị. Windows chưa ký Authenticode; APK từ 0.1.2 dùng khóa phát hành cố định.
 
+## Android Google accounts and TV QR in 0.1.12
+
+- Local verification passed **148 Android tests** on SDK 26/28, debug APK build, **115 frontend tests**, production build, **17 Apps Script protocol tests** and **12 release-tool tests**.
+- Regressions cover account-first Drive persistence, multiple folders, saved/unsaved cancellation, account-bound silent renewal, promotion during renewal, corrupt selected photos, asynchronous imports, stale completion polls and replacement import preservation.
+- Live Apps Script checks completed Google consent callbacks and access-token delivery for Drive and Photos. The resulting tokens successfully listed Drive folders and created/deleted a Photos Picker session. Temporary test connections were removed. A JVM smoke check ran the production Kotlin/OkHttp broker transport through pair, pending poll and cancel.
+- Spec and independent quality review passed after fixing long-import recovery and cancellation races. Official APK signing certificate/package were registered as an Android OAuth client. The service's Web client secret remains in Script Properties, outside Git and the APK; the public privacy policy describes broker token storage.
+- **Not validated on a physical phone or TV:** release-signed native chooser/consent, end-to-end Photos selection/import on Android, installation/upgrade, firmware wallpaper and reboot behavior. No ADB device was connected. Google verification remains pending, including homepage ownership propagation; live consent still shows the unverified-app warning.
+
+[Signed release workflow](https://github.com/mawta/wallta/actions/runs/42202687298) · [Google setup](setup-google.md) · [Privacy policy](https://mawta.github.io/wallta/privacy.html).
+
 ## Google sign-in and source dialog in 0.1.11
 
 - **172 Rust tests** (155 library and 17 behavior tests), zero failures or skips, and Windows installer build passed in [Windows CI](https://github.com/mawta/wallta/actions/runs/42193249833).

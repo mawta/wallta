@@ -2,8 +2,8 @@
 
 ## Cài đặt
 
-- Windows 10/11 x64: mở bộ cài `Wallta_0.1.11_x64-setup.exe`. Windows có thể cảnh báo nhà phát hành chưa xác định vì chưa ký Authenticode.
-- Android/Android TV 8+: cho phép cài từ nguồn đang dùng rồi mở `Wallta_0.1.11_android.apk`. Nếu đã cài APK debug cũ, có thể phải gỡ trước vì khác khóa ký. Gỡ app xóa cấu hình và ảnh đã nhập vào app; sao lưu ảnh cần giữ trước.
+- Windows 10/11 x64: mở bộ cài `Wallta_0.1.12_x64-setup.exe`. Windows có thể cảnh báo nhà phát hành chưa xác định vì chưa ký Authenticode.
+- Android/Android TV 8+: cho phép cài từ nguồn đang dùng rồi mở `Wallta_0.1.12_android.apk`. Nếu đã cài APK debug cũ, có thể phải gỡ trước vì khác khóa ký. Gỡ app xóa cấu hình và ảnh đã nhập vào app; sao lưu ảnh cần giữ trước.
 - Tải bộ cài tại GitHub Releases công khai, không cần đăng nhập. Không cần tài khoản Wallta.
 
 Từ 0.1.2, mở **Cài đặt → Cập nhật** để kiểm tra, tải và cài bản mới. App tự kiểm tra tối đa mỗi ngày khi mở. [Chi tiết cập nhật](updating.md).
@@ -23,7 +23,7 @@ Android đổi wallpaper nền tối thiểu 15 phút và có thể trễ do Doz
 
 ## Nhiều thư mục và ảnh 4K
 
-Trong **Nguồn ảnh → Chỉnh sửa**, chọn thêm hoặc bỏ từng thư mục rồi lưu. Hỗ trợ nhiều thư mục local, Drive và WebDAV; Drive riêng qua relay Android/TV giữ giới hạn thư mục đã ghép quyền.
+Trong **Nguồn ảnh → Chỉnh sửa**, chọn thêm hoặc bỏ từng thư mục rồi lưu. Hỗ trợ nhiều thư mục local, Drive và WebDAV; Kết nối Google mới trên Android/TV chọn được nhiều thư mục; relay cũ vẫn giới hạn thư mục đã ghép quyền.
 
 Bấm **4K** trên ảnh hoặc **Nguồn ảnh → Nâng ảnh 4K**. Chọn **Nhanh** trên Windows/Android/TV, hoặc **AI** trên Windows có GPU hỗ trợ Vulkan. Chọn nguồn và **Chạy tất cả**, hoặc chọn từng ảnh. Ảnh hoàn thành tự lưu thành bộ ảnh riêng; ảnh gốc giữ nguyên. [Cách dùng và giới hạn](upscaling.md).
 
@@ -38,8 +38,8 @@ Phím mũi tên di chuyển focus, Enter chọn. Trong ô nhập dùng Up/Down �
 - Chuyển ảnh giữa điện thoại và TV/PC: **Nguồn ảnh → Gửi / nhận qua Wi-Fi**. Máy kia mở QR/link bằng trình duyệt; nhận xong xác nhận thêm ảnh. [Các bước chuyển ảnh](local-transfer.md).
 
 - Link online: dùng một URL ảnh, JSON danh sách ảnh hoặc WebDAV. Một trang web chia sẻ thư mục bất kỳ không bảo đảm liệt kê được ảnh. [Định dạng JSON](../README.md#nguồn-online).
-- Drive: thư mục công khai cần API key. Drive riêng dùng OAuth Windows hoặc [relay HTTPS](../relay/README.md) trên Android/TV. Trên Windows, đăng nhập rồi bấm **Lưu kết nối**, chưa cần chọn thư mục. Lần sau mở **Cài đặt → Tài khoản đã kết nối → Quản lý**, hoặc **Thêm nguồn → Google Drive → Dùng kết nối**. Bấm **Chọn / đổi thư mục** bất cứ lúc nào, rồi **Lưu & áp dụng**. Client ID/secret không cần nhập lại khi dùng kết nối đã lưu; form kết nối mới dành cho tài khoản khác.
-- Photos: [cần thiết lập Google](setup-google.md). TV dùng Ambient với quyền Partner Program; Windows dùng Picker để nhập bộ ảnh đã chọn; điện thoại dùng trình chọn ảnh hệ thống/cloud nếu có. Bộ ảnh nhập không tự theo dõi album.
+- Drive: bấm **Kết nối tài khoản Google**. Điện thoại mở hộp chọn tài khoản; TV hiện QR để đăng nhập bằng điện thoại; Windows mở trình duyệt. **Lưu kết nối** trước, chọn nhiều thư mục sau trong **Nâng cao → Chọn / đổi thư mục**. Mở lại tài khoản ở **Cài đặt → Tài khoản đã kết nối**. Bản chính thức không cần nhập URL hay Client ID/secret.
+- Photos: kết nối Google, mở Picker để chọn ảnh và bấm Done; quay lại Wallta, chờ nhập xong rồi lưu. TV dùng QR trên điện thoại. **Chọn lại ảnh** trên nguồn đã lưu để thay bộ ảnh. Bộ ảnh nhập không tự theo dõi album. [Chi tiết Google](setup-google.md).
 
 Để ngắt nguồn, xóa nguồn trong **Nguồn ảnh**. **Dọn bộ nhớ** chỉ xóa cache, không xóa ảnh gốc trong thư mục của Sếpp; ảnh nhập riêng do Wallta quản lý sẽ bị xóa khi xóa chính nguồn nhập đó.
 
