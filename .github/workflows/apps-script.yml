@@ -1,0 +1,25 @@
+name: Apps Script broker
+on:
+  push:
+    paths:
+      - 'google-apps-script/**'
+      - 'scripts/apps-script.test.mjs'
+      - '.github/workflows/apps-script.yml'
+  pull_request:
+    paths:
+      - 'google-apps-script/**'
+      - 'scripts/apps-script.test.mjs'
+      - '.github/workflows/apps-script.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  protocol:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: node --test scripts/apps-script.test.mjs
+      - run: node scripts/release.mjs privacy
