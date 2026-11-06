@@ -58,10 +58,14 @@ class WalltaBridge(private val activity: MainActivity, private val web: WebView)
                     "lan_stop" -> lan.stop()
                     "lan_accept" -> { val state = lan.accept(); WallpaperWorker.schedule(activity); state }
                     "clear_cache" -> { upscale.clearCache(); JSONObject.NULL }
-                    "google_begin" -> { authorizationIds.add(args.getString("sourceId")); GoogleAmbient(activity, store).begin(args) }
-                    "google_poll" -> GoogleAmbient(activity, store).poll(args.getString("sourceId"))
-                    "google_disconnect" -> { GoogleAmbient(activity, store).disconnect(args.getString("sourceId")); JSONObject.NULL }
-                    "google_cancel" -> { GoogleAmbient(activity, store).cancel(args.getString("sourceId")); repo.releaseUnusedGrants(); JSONObject.NULL }
+                    "google_connection_options" -> GoogleConnections(activity, store).options()
+                    "google_default_client_available" -> true
+                    "google_begin" -> { authorizationIds.add(args.getString("sourceId")); GoogleConnections(activity, store).begin(args) }
+                    "google_poll" -> GoogleConnections(activity, store).poll(args.getString("sourceId"))
+                    "google_drive_folders" -> GoogleConnections(activity, store).folders(args.getString("sourceId"), args.optString("parentId", "root"), args.optString("pageToken"), args.optBoolean("shared"))
+                    "google_drive_select" -> GoogleConnections(activity, store).select(args.getString("sourceId"), args.getString("folderId"))
+                    "google_disconnect" -> { GoogleConnections(activity, store).disconnect(args.getString("sourceId")); GoogleAmbient(activity, store).disconnect(args.getString("sourceId")); JSONObject.NULL }
+                    "google_cancel" -> { GoogleConnections(activity, store).cancel(args.getString("sourceId")); GoogleAmbient(activity, store).cancel(args.getString("sourceId")); repo.releaseUnusedGrants(); JSONObject.NULL }
                     "open_external" -> { val uri = Uri.parse(args.getString("url")); require(uri.scheme == "https" && !uri.host.isNullOrBlank() && uri.userInfo == null) { "Only HTTPS external links are supported" }; activity.runOnUiThread { try { activity.startActivity(Intent(Intent.ACTION_VIEW, uri).addCategory(Intent.CATEGORY_BROWSABLE)); reply(id, true, null) } catch (e: Exception) { reply(id, false, "No browser is installed on this device. Scan the QR code on your phone.") } }; return@execute }
                     "open_screensaver_settings" -> { activity.runOnUiThread { try { activity.startActivity(Intent(Settings.ACTION_DREAM_SETTINGS)); reply(id, true, null) } catch (e: Exception) { reply(id, false, "This firmware hides Screensaver settings. Open TV Settings → Device Preferences → Screensaver and choose Wallta.") } }; return@execute }
                     else -> error("Unknown native command: $command")
@@ -85,5 +89,5 @@ class WalltaBridge(private val activity: MainActivity, private val web: WebView)
         activity.runOnUiThread { if (!closed) web.evaluateJavascript("window.__walltaReply&&window.__walltaReply(${JSONObject.quote(id)},$success,$json)", null) }
     }
     fun installerResult(success: Boolean) { updater.installerResult(success) }
-    fun close() { closed = true; TrustedWebView.unregisterUpscale(upscale); upscale.close(); updater.close(); lan.close(); authorizationIds.forEach { GoogleAmbient(activity, store).cancel(it) }; runCatching { MediaRepository(activity.applicationContext, store).releaseUnusedGrants() }; io.shutdownNow(); control.shutdownNow() }
+    fun close() { closed = true; TrustedWebView.unregisterUpscale(upscale); upscale.close(); updater.close(); lan.close(); authorizationIds.forEach { GoogleConnections(activity, store).cancel(it); GoogleAmbient(activity, store).cancel(it) }; runCatching { MediaRepository(activity.applicationContext, store).releaseUnusedGrants() }; io.shutdownNow(); control.shutdownNow() }
 }

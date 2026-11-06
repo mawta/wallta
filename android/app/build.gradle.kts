@@ -22,7 +22,7 @@ android {
     }
     namespace = "app.wallta"
     compileSdk = 35
-    defaultConfig { applicationId = "app.wallta"; minSdk = 26; targetSdk = 35; versionCode = 12; versionName = "0.1.11" }
+    defaultConfig { applicationId = "app.wallta"; minSdk = 26; targetSdk = 35; versionCode = 13; versionName = "0.1.12" }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     kotlinOptions { jvmTarget = "17" }
     buildTypes { release { isMinifyEnabled = false; if (hasReleaseSigning) signingConfig = signingConfigs.getByName("stableRelease") } }
@@ -38,6 +38,7 @@ android {
     }
 }
 dependencies {
+    implementation("com.google.android.gms:play-services-auth:22.0.0")
     implementation("androidx.webkit:webkit:1.13.0")
     implementation("androidx.core:core:1.15.0")
     implementation("androidx.work:work-runtime-ktx:2.10.1")

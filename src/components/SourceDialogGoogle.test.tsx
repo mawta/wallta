@@ -3,8 +3,45 @@ import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { expect, it, vi } from 'vitest';
 import { SourceDialog } from './SourceDialog';
-import { callNative } from '../lib/native';
-vi.mock('../lib/native', () => ({ isNative: () => true, isAndroid: () => false, isDesktop: () => true, callNative: vi.fn(), registerPreviewFiles: vi.fn(), errorMessage: (e: unknown) => String(e) }));
+import { callNative, isAndroid } from '../lib/native';
+vi.mock('../lib/native', () => ({ isNative: () => true, isAndroid: vi.fn(() => false), isDesktop: () => true, callNative: vi.fn(), registerPreviewFiles: vi.fn(), errorMessage: (e: unknown) => String(e) }));
+
+it('cancels an unfinished Photos reselection when its control is closed', async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  HTMLDialogElement.prototype.showModal = function () {};
+  HTMLDialogElement.prototype.close = function () {};
+  vi.mocked(callNative).mockReset().mockImplementation(async command => (command === 'google_default_client_available' ? true : { phase: 'selecting', pollIntervalSeconds: 5 }) as never);
+  const host = document.createElement('div'); const root = createRoot(host);
+  try {
+    await act(async () => root.render(<SourceDialog initial={{ id: 'reselect', name: 'Photos', kind: 'local', location: 'saved-import', enabled: true, recursive: false, google: { provider: 'photos', connected: true } }} onSave={vi.fn()} onClose={vi.fn()} busy={false} />));
+    const reselect = host.querySelector<HTMLButtonElement>('.google-reselect')!;
+    await act(async () => reselect.click());
+    await act(async () => host.querySelector<HTMLButtonElement>('.google-sign-in')!.click());
+    await act(async () => reselect.click());
+    expect(callNative).toHaveBeenCalledWith('google_cancel', { sourceId: 'reselect', discardImports: true });
+    expect(host.textContent).toContain('Google Photos');
+  } finally { await act(async () => root.unmount()); }
+});
+
+it('saves an Android account before choosing folders, then browses Drive after reopening', async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  HTMLDialogElement.prototype.showModal = function () { this.setAttribute('open', ''); };
+  HTMLDialogElement.prototype.close = function () {};
+  vi.mocked(isAndroid).mockReturnValue(true);
+  vi.mocked(callNative).mockReset().mockImplementation(async command => (command === 'google_drive_folders' ? { folders: [{ id: 'family', name: 'Family' }] } : command === 'google_drive_select' ? { id: 'family', name: 'Family', account: 'test@example.com' } : undefined) as never);
+  const source = { id: 'android-saved', name: 'Drive', kind: 'drive' as const, location: '', enabled: true, recursive: true, google: { provider: 'drive' as const, connected: true, account: 'test@example.com' } };
+  const host = document.createElement('div'); const root = createRoot(host); const saved = vi.fn().mockResolvedValue(true);
+  try {
+    await act(async () => root.render(<SourceDialog initial={source} onSave={saved} onClose={vi.fn()} busy={false} />));
+    expect(host.textContent).toContain('Lưu kết nối');
+    await act(async () => host.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })));
+    expect(saved).toHaveBeenCalledWith(expect.objectContaining({ enabled: false, location: '' }), expect.objectContaining({ apply: false }));
+    const choose = Array.from(host.querySelectorAll('button')).find(b => b.textContent?.includes('Chọn / đổi thư mục'));
+    expect(choose).toBeDefined();
+    await act(async () => choose!.click());
+    expect(callNative).toHaveBeenCalledWith('google_drive_folders', expect.objectContaining({ sourceId: source.id }));
+  } finally { await act(async () => root.unmount()); vi.mocked(isAndroid).mockReturnValue(false); }
+});
 
 it('can save a connected account without a folder and choose one after reopening the saved source', async () => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });

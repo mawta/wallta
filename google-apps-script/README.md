@@ -1,8 +1,8 @@
 # Wallta Google authorization broker
 
-A dependency-free Google Apps Script project for QR authorization on Android TV/TV boxes. The same API can serve a browser-based phone fallback. The planned primary phone experience uses Google's native account/authorization UI instead.
+A dependency-free Google Apps Script project for QR authorization on Android TV/TV boxes and Android devices without Google Play services. Phones with Google Play services use Google's native account/authorization UI.
 
-**This service is not integrated into Wallta 0.1.11.** Deploy it, configure its separate Web OAuth client, then provide the `/exec` URL for app integration and live OAuth validation. Local protocol tests use simulated Apps Script services and Google responses; they do not prove a deployed callback works.
+Wallta's Android integration uses a preconfigured deployment URL. Self-hosted builds can replace `GoogleConnections.BROKER_URL` with their deployment and configure a separate Web OAuth client. Keep its secret in Script Properties, never in the APK. Local protocol tests simulate Apps Script services and Google responses; physical-device behavior still needs device testing.
 
 [Hướng dẫn triển khai tiếng Việt](DEPLOY.vi.md)
 

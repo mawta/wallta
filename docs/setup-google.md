@@ -1,104 +1,42 @@
-# Thiết lập Google cho Wallta
+# Kết nối Google
 
-Bản Windows chính thức có sẵn OAuth client Desktop của Wallta: bấm kết nối và đăng nhập trong trình duyệt, không cần tự nhập Client ID/secret. Hồ sơ Google đang chờ duyệt; có thể xuất hiện cảnh báo ứng dụng chưa được xác minh. Tài khoản chỉ nhìn thấy dữ liệu được cấp quyền. Các mục dưới dành cho bản tự build, relay hoặc cấu hình riêng. Token nhập tay chỉ dùng để thử; hết hạn cần nhập lại.
+Bản cài chính thức có sẵn cấu hình Google. Người dùng không cần nhập Client ID, secret hoặc URL dịch vụ. Hồ sơ Google đang chờ duyệt, nên Google có thể hiện cảnh báo ứng dụng chưa xác minh.
 
-Nếu app yêu cầu cấu hình thủ công, chọn **Hướng dẫn cấu hình** trong form Google Drive hoặc Google Photos để mở tài liệu này. Các bước bên dưới đối chiếu tài liệu Google ngày 27/10/2026.
-
-Local, USB và **Gửi / nhận qua Wi-Fi** không cần Google Cloud, key hay tài khoản Google. Google Photos qua trình chọn ảnh trên điện thoại Android cũng không cần Client ID.
-
-| Muốn kết nối | Cần tạo / chuẩn bị | Nhập trong Wallta |
-|---|---|---|
-| Drive công khai | Drive API + API key | Link thư mục + Google API key trong Nâng cao |
-| Drive riêng, Windows | Bản cài chính thức | Bấm kết nối; chọn thư mục sau |
-| Drive riêng, Android / TV | Relay HTTPS + OAuth Web application | Link thư mục + địa chỉ Wallta Drive Relay |
-| Photos, Windows | Bản cài chính thức | Bấm kết nối và chọn ảnh |
-| Photos, điện thoại Android | Trình chọn ảnh hệ thống / cloud provider | Bấm kết nối và chọn ảnh, không nhập key |
-| Album Photos tự đổi trên TV | Quyền Ambient từ Partner Program + OAuth TVs and Limited Input devices | Client ID / secret; Device ID nhận được sau kết nối |
-
-## Tạo project và OAuth consent
-
-1. Mở [Google Cloud Console](https://console.cloud.google.com/), đăng nhập tài khoản quản lý dự án. Ở bộ chọn project trên cùng, tạo project mới hoặc chọn project riêng cho Wallta.
-2. **APIs & Services → Library**, tìm API cần dùng ở bảng trên, bấm **Enable**. API key và OAuth client phải thuộc chính project đã bật API.
-3. Với OAuth: **Google Auth platform → Branding → Get Started**, điền tên ứng dụng, email hỗ trợ và liên hệ; hoàn tất theo yêu cầu Google.
-4. **Audience**: tài khoản Gmail cá nhân thường dùng **External**. Khi dự án ở Testing, thêm chính email đăng nhập vào **Test users**. Internal chỉ phù hợp tổ chức Workspace đủ điều kiện.
-5. **Data Access → Add or Remove Scopes**: Drive dùng `https://www.googleapis.com/auth/drive.readonly`; Photos Picker dùng `https://www.googleapis.com/auth/photospicker.mediaitems.readonly`. Ambient theo quyền Google đã duyệt cho project.
-6. **Clients → Create client**, chọn đúng loại trong bảng. Copy Client ID và secret nếu được cấp. Không tạo một client Android thông thường rồi dán vào ô Desktop/TV/Web.
-
-[Hướng dẫn consent chính thức](https://developers.google.com/workspace/guides/configure-oauth-consent) · [Tạo credential theo loại ứng dụng](https://developers.google.com/workspace/guides/create-credentials).
-
-## Google Drive công khai
-
-Bật Google Drive API, tạo API key giới hạn cho API này, chia sẻ thư mục phù hợp. Thêm nguồn Drive với link `/drive/folders/ID` hoặc ID, mở Nâng cao và nhập API key. Thư mục công khai vẫn cần API key để gọi API liệt kê. Không suy luận danh sách ảnh từ HTML của Drive.
-
-1. Bật [Google Drive API](https://console.cloud.google.com/apis/library/drive.googleapis.com).
-2. **APIs & Services → Credentials → Create credentials → API key**. Mở key vừa tạo, **API restrictions → Restrict key → Google Drive API**.
-3. Key này gọi từ bản cài, không phải website. Không đặt giới hạn HTTP referrer rồi mong bản cài dùng được. Nếu giới hạn theo IP, IP phải khớp thiết bị/mạng gọi API; không chia sẻ key ra ngoài phạm vi sử dụng.
-4. Trên Drive, **Share → General access → Anyone with the link → Viewer**. Chỉ chọn cách này nếu chủ động muốn người có link xem được ảnh. Kiểm tra quyền các file bên trong thư mục.
-5. Trong Wallta, điền tên nguồn và link thư mục. Mở **Nâng cao**, dán vào **Google API key · thư mục công khai**, rồi thêm nguồn.
-
-Không cần OAuth Client ID cho cách này. Với ảnh riêng, giữ thư mục riêng và dùng OAuth/relay bên dưới.
-
-## Google Drive riêng trên Windows
-
-Bản chính thức dùng sẵn client của Wallta. Bản tự build chưa cấu hình client sẽ hiện ô OAuth Client ID và client secret của loại **Desktop app**. Bấm **Kết nối tài khoản Google**, cấp quyền đọc Drive trong trình duyệt rồi **Lưu kết nối**. Không cần chọn thư mục ngay. Callback loopback `http://127.0.0.1:<port>/oauth/callback` dùng PKCE và state. Refresh token lưu trong Windows Credential Manager sau khi lưu nguồn thành công.
-
-Tài khoản đã lưu nằm ở **Cài đặt → Tài khoản đã kết nối → Quản lý**. Khi mở **Thêm nguồn → Google Drive**, chọn **Dùng kết nối** để mở lại tài khoản cũ, không cần nhập lại Client ID/secret. Bấm **Chọn / đổi thư mục** bất cứ lúc nào rồi **Lưu & áp dụng**. Form đăng nhập trống dành cho kết nối mới, không biểu thị kết nối cũ bị mất. Google Photos đã nhập cũng xuất hiện trong danh sách tài khoản để mở lại bộ ảnh hoặc chọn lại ảnh.
-
-Trong **Google Auth platform → Clients → Create client → Desktop app**, đặt tên như `Wallta Windows`. Không cần đăng ký redirect URI relay cho loại Desktop app. Dùng đúng Client ID của Desktop app; Wallta tự chọn cổng callback local. OAuth app ở Testing có thể cần kết nối lại khi Google làm refresh token hết hạn.
-
-Scope đọc toàn Drive được Google cấp cho ứng dụng; Wallta chỉ liệt kê thư mục đã chọn. Muốn ngắt quyền local, xóa nguồn. Để thu hồi hoàn toàn quyền ở phía Google, dùng [trang quyền tài khoản Google](https://myaccount.google.com/permissions). Xóa nguồn không xóa ảnh gốc trên Drive.
-
-## Drive riêng trên Android/TV
-
-Chạy [relay Laravel](../relay/README.md) tại HTTPS với OAuth client loại **Web application**. Trong Wallta, nhập thư mục Drive và địa chỉ relay, bấm kết nối, quét QR bằng điện thoại. Kiểm tra đúng tên thiết bị/thư mục trên trang relay trước khi đăng nhập Google; quay lại TV rồi lưu nguồn.
-
-Người triển khai relay tạo **Clients → Create client → Web application**, đăng ký **Authorized redirect URIs** chính xác `https://TEN-MIEN-RELAY/oauth/callback`. Trên máy chủ relay đặt `APP_URL=https://TEN-MIEN-RELAY`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, tạo `APP_KEY` và cấu hình HTTPS theo README relay. Trong TV/điện thoại chỉ nhập URL relay; không cần copy secret Web application vào thiết bị. Repo chưa có relay công cộng để nhập sẵn.
-
-Google refresh/access token ở relay, được mã hóa bằng APP_KEY. TV giữ một capability mã hóa bằng Android Keystore, giới hạn truy cập đúng thư mục qua relay. Hủy hộp thêm nguồn sẽ hủy pairing đang chờ; xóa nguồn thu hồi capability. Relay chỉ là tùy chọn cho nguồn riêng, không cần cho local/URL/JSON/WebDAV.
-
-Không dùng device OAuth với `drive.readonly` trên TV: Google giới hạn scope của [luồng thiết bị đầu vào hạn chế](https://developers.google.com/identity/protocols/oauth2/limited-input-device).
-
-## Google Photos trên TV
-
-Google giới hạn **Ambient API** cho thành viên đã được chấp thuận trong [Photos Partner Program](https://developers.google.com/photos/partner-program/overview). Có Cloud project thông thường chưa đủ để bật luồng này. Sau khi được chấp thuận, dùng cấu hình Ambient do Google cung cấp và OAuth client **TVs and Limited Input devices**.
-
-Trong nguồn Photos, nhập client ID/secret, bấm kết nối và dùng điện thoại mở QR/mã xác nhận. Sau bước cấp quyền, chọn album qua trang cài đặt thiết bị Ambient, chờ trạng thái sẵn sàng và lưu nguồn. Wallta tôn trọng khoảng polling, giới hạn lượt liệt kê, không dùng Photos cache làm nguồn offline; ngắt quyền/xóa nguồn xóa cache thuộc nguồn.
-
-Tích hợp Ambient chưa được kiểm chứng với project được cấp quyền hoặc TV thật. Nếu Google chưa cấp Ambient, dùng Drive/local hoặc nhập ảnh đã chọn.
-
-## Google Photos trên Windows và Android
-
-Windows dùng OAuth client Desktop app và [Google Photos Picker API](https://developers.google.com/photos/picker/guides/get-started-picker). Bật Picker API, đăng nhập, chọn các ảnh trong giao diện Google rồi Wallta tải bản sao thành một nguồn local. Giới hạn 500 ảnh/512 MB mỗi lần nhập. Bộ ảnh không tự theo dõi thay đổi album; nhập lại khi cần.
-
-Android mở trình chọn ảnh hệ thống, dùng ACTION_OPEN_DOCUMENT trên thiết bị cũ. Có thể chọn Google Photos/cloud chỉ khi nhà cung cấp đã được cài và tích hợp với trình chọn ảnh. Giới hạn 50 ảnh/256 MB; không cần OAuth client ID trên điện thoại. Ảnh đã nhập là bản sao local do Wallta quản lý; xóa nguồn sẽ xóa những bản sao đó, không xóa ảnh trên Google.
-
-## Khắc phục lỗi kết nối
-
-| Lỗi / hiện tượng | Kiểm tra |
+| Thiết bị | Cách đăng nhập |
 |---|---|
-| `access_denied`, tài khoản chưa được phép | Email có trong Audience → Test users của đúng project; không chọn nhầm tài khoản |
-| `redirect_uri_mismatch` ở relay | Scheme HTTPS, domain, cổng nếu có và `/oauth/callback` trùng hoàn toàn; APP_URL đúng domain bên ngoài |
-| `API not enabled`, `SERVICE_DISABLED`, 403 | API đã bật ở project sở hữu key/client; API restrictions đúng API; quyền xem thư mục/file đủ |
-| `invalid_client` | Loại OAuth client đúng nền tảng; ID/secret cùng một client và không thừa khoảng trắng |
-| Token nhập tay dùng được rồi hết | Kết nối OAuth để quản lý refresh token; không xem access token là key vĩnh viễn |
-| Photos TV không bật được API | Cần được duyệt Ambient Partner, không giải quyết bằng tạo thêm API key thông thường |
-| Android picker không có Photos | Cập nhật Google Photos/nhà cung cấp cloud; nếu firmware không hỗ trợ thì nhập local hoặc chuyển qua Wi-Fi |
+| Windows | **Kết nối tài khoản Google** → đăng nhập và cấp quyền trong trình duyệt |
+| Điện thoại Android có Google Play services | **Kết nối tài khoản Google** → hộp chọn tài khoản hệ thống → cấp quyền |
+| Android TV / thiết bị không có Play services | **Kết nối tài khoản Google** → quét QR bằng điện thoại → kiểm tra mã → đăng nhập Google |
 
-## Bảo quản credential
+Nếu đăng nhập hệ thống thất bại trên điện thoại, chọn **Kết nối bằng QR**. Local, USB và chuyển ảnh qua Wi-Fi không cần tài khoản Google.
 
-Không đưa secret vào manifest JSON, URL hoặc Git. Frontend không nhận lại credential đã lưu. Các ô để trống khi chỉnh sửa giữ credential cũ nếu trường bị bỏ qua; chuỗi rỗng gửi rõ ràng sẽ xóa credential. Nguồn mới phải lưu thành công mới sử dụng quyền OAuth đang chờ. Khóa APP_KEY relay cần lưu bền và sao lưu kín; đổi khóa làm token mã hóa cũ không đọc được.
-# Chọn và đổi nguồn đã lưu
+## Google Drive
 
-Windows: kết nối Google Drive → chọn thư mục → **Lưu & áp dụng**. Có thể bấm **Lưu nguồn** trước khi chọn thư mục; nguồn hiện **Chưa chọn thư mục**. Sau đó vào **Nguồn ảnh → Chọn / đổi thư mục**, không cần tạo nguồn hay đăng nhập lại khi quyền vẫn còn hiệu lực.
+Kết nối rồi **Lưu kết nối** ngay; chưa cần chọn thư mục. Tài khoản đã lưu nằm ở **Cài đặt → Tài khoản đã kết nối**. Mở lại nguồn, vào **Nâng cao → Chọn / đổi thư mục** để chọn nhiều thư mục bất cứ lúc nào. Nguồn chưa có thư mục được lưu ở trạng thái tắt. Sau khi chọn thư mục, **Lưu & áp dụng** để bắt đầu dùng ảnh.
 
-**Lưu & áp dụng** chọn ảnh từ chính thư mục đó và bật tự đổi. Tùy chọn **Khởi động cùng Windows** nằm ngay trong form và có thể đổi ở Cài đặt. Các nguồn khác đang bật vẫn tham gia vòng đổi ảnh. Tổng quan hiện nhà cung cấp, tài khoản và thư mục của ảnh hiện tại; thẻ nguồn phân biệt **Đang hiển thị**, **Đã bật** và **Đã tắt**.
+Wallta yêu cầu quyền đọc Drive và dùng API để đọc các thư mục ảnh đã chọn. Xóa nguồn sẽ xóa kết nối của nguồn đó, không xóa ảnh gốc trên Drive. Thu hồi toàn bộ quyền tại [Google Account permissions](https://myaccount.google.com/permissions).
 
-Google Photos trên Windows lưu bản sao bộ ảnh đã chọn và giữ nhãn Google Photos sau khi nhập. **Chọn lại ảnh** trên nguồn đã lưu để thay bộ ảnh. Hủy lần chọn mới giữ nguyên bộ ảnh cũ. Không tự theo dõi ảnh mới trong album Google Photos có sẵn; cần tính năng này hãy dùng thư mục Drive.
+## Google Photos
 
-Android/TV Drive vẫn chọn link thư mục trước khi cấp quyền relay. TV Photos dùng album qua Ambient khi project đã được Google cấp quyền.
+Kết nối tài khoản rồi **Mở Google Photos**, chọn ảnh và bấm **Done**. Trên TV, quét QR để mở trình chọn trên điện thoại. Quay lại Wallta và chờ ảnh nhập xong trước khi lưu. Mở nguồn đã lưu và bấm **Chọn lại ảnh** để thay bộ ảnh; hủy lần chọn mới giữ bộ ảnh cũ.
 
-## Build Windows với client mặc định
+Photos Picker chỉ cấp quyền cho những ảnh đã chọn. Wallta tải bản sao về thiết bị, không tự đồng bộ album. Xóa nguồn đã nhập sẽ xóa bản sao do Wallta quản lý, giữ ảnh gốc trong Google Photos. Tích hợp Ambient cũ dành riêng cho project được Google duyệt trong Photos Partner Program.
 
-CI phát hành đọc GitHub Actions secret `WALLTA_GOOGLE_OAUTH_CLIENT_JSON`: nội dung JSON tải từ OAuth client loại **Desktop app**, có trường `installed.client_id` và `installed.client_secret`. Cung cấp cùng biến môi trường khi compile Rust để build riêng. Để chạy thử local, có thể đặt `WALLTA_GOOGLE_OAUTH_CLIENT_FILE` trỏ tới file JSON ngoài repo. Không commit giá trị hoặc file credential.
+## Dịch vụ QR và dữ liệu
 
-OAuth Desktop client được phân phối trong mã native của bộ cài và không thể giữ bí mật như client phía server. Access/refresh token riêng của người dùng vẫn lưu trong Windows Credential Manager. Không dùng Web application client/secret của relay cho bộ cài.
+Dịch vụ [Google Apps Script](../google-apps-script/README.md) xử lý cấp quyền, giữ email và token Google trong Script Properties riêng của dịch vụ. Người vận hành và các biên tập viên script đáng tin cậy có thể truy cập kho này. Thiết bị giữ capability được mã hóa bằng Android Keystore và nhận access token ngắn hạn; refresh token và Web client secret không được gửi vào app. Ảnh tải trực tiếp từ Google về thiết bị.
+
+Mã đăng nhập hết hạn sau 10 phút; kết nối dịch vụ hết hạn sau 30 ngày không sử dụng. Hủy kết nối chưa lưu hoặc xóa nguồn sẽ yêu cầu dịch vụ xóa quyền của thiết bị. Cần mạng để yêu cầu này hoàn tất. Xem [chính sách dữ liệu](https://mawta.github.io/wallta/privacy.html).
+
+## Bản tự build
+
+- **Windows:** tạo OAuth client loại Desktop app; cung cấp JSON qua biến môi trường WALLTA_GOOGLE_OAUTH_CLIENT_JSON khi build, hoặc WALLTA_GOOGLE_OAUTH_CLIENT_FILE để chạy thử local. Không commit file credential. Callback loopback và PKCE được Wallta quản lý.
+- **Android:** tạo OAuth client loại Android trong project đã bật Drive API và Photos Picker API, với package app.wallta và SHA-1 của chứng chỉ ký APK. Chứng chỉ debug và release cần client riêng. Không nhúng Web client secret vào APK.
+- **TV/QR:** triển khai [Apps Script theo hướng dẫn](../google-apps-script/DEPLOY.vi.md), đăng ký Web OAuth client với URI /usercallback chính xác do endpoint health trả về. Đặt ID/secret/URL trong Script Properties và thay GoogleConnections.BROKER_URL khi build riêng.
+- **Drive công khai:** tạo API key giới hạn cho Drive API. Trong Nâng cao, nhập link/ID thư mục công khai và API key. Không dùng key để thay thế OAuth cho ảnh riêng.
+
+OAuth scopes: drive.readonly, photospicker.mediaitems.readonly và quyền email để hiển thị tài khoản. Dùng project ở chế độ Testing thì thêm tài khoản vào Test users. Bản Android ký khác hoặc project chưa bật API có thể báo lỗi cấp quyền.
+
+Relay Laravel trong thư mục [relay](../relay/README.md) vẫn có cho các bản cũ hoặc triển khai riêng. Bản chính thức mới dùng kết nối hệ thống/Apps Script, không yêu cầu nhập URL relay.
+
+Tài liệu chính thức: [Authorization trên Android](https://developers.google.com/identity/authorization/android), [Photos Picker](https://developers.google.com/photos/picker/guides/get-started-picker), [Apps Script web apps](https://developers.google.com/apps-script/guides/web).

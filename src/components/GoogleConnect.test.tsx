@@ -7,6 +7,44 @@ import { callNative, isAndroid } from '../lib/native';
 
 vi.mock('../lib/native', () => ({ isNative: () => true, isAndroid: vi.fn(() => true), errorMessage: (error: unknown) => String(error), callNative: vi.fn() }));
 
+it.each(['native', 'broker'])('starts Android %s Google sign-in without credentials or a URL', async mode => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  vi.mocked(isAndroid).mockReturnValue(true);
+  vi.mocked(callNative).mockReset().mockImplementation(async command => {
+    if (command === 'google_connection_options') return { mode, configured: true, brokerUrl: 'https://script.google.com/macros/s/wallta/exec' } as never;
+    if (command === 'google_default_client_available') return true as never;
+    return { phase: 'ready', sourceKind: 'drive', account: 'test@example.com' } as never;
+  });
+  const host = document.createElement('div'); const root = createRoot(host); const connected = vi.fn();
+  try {
+    await act(async () => root.render(<GoogleConnect source={{ id: 'android-drive', name: 'Drive', kind: 'drive', location: '', enabled: true, recursive: true }} onConnected={connected} />));
+    expect(host.querySelectorAll('input')).toHaveLength(0);
+    expect(host.textContent).not.toContain('Hướng dẫn cấu hình');
+    await act(async () => host.querySelector('button')!.click());
+    expect(callNative).toHaveBeenCalledWith('google_begin', expect.objectContaining({ sourceId: 'android-drive', clientId: '', clientSecret: '', relayUrl: '' }));
+    expect(connected).toHaveBeenCalledWith(expect.objectContaining({ google: expect.objectContaining({ account: 'test@example.com' }) }));
+  } finally { await act(async () => root.unmount()); }
+});
+
+it('offers QR sign-in after native Android authorization fails', async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  vi.mocked(isAndroid).mockReturnValue(true);
+  vi.mocked(callNative).mockReset().mockImplementation(async (command, args) => {
+    if (command === 'google_connection_options') return { mode: 'native', configured: true } as never;
+    if (command === 'google_begin' && args?.mode !== 'broker') throw new Error('Google authorization failed');
+    return { phase: 'authorizing', verificationUrl: 'https://script.google.com/macros/s/wallta/exec', pollIntervalSeconds: 5 } as never;
+  });
+  const host = document.createElement('div'); const root = createRoot(host);
+  try {
+    await act(async () => root.render(<GoogleConnect source={{ id: 'fallback', name: 'Drive', kind: 'drive', location: '', enabled: true, recursive: true }} onConnected={vi.fn()} />));
+    await act(async () => host.querySelector('button')!.click());
+    const qrButton = Array.from(host.querySelectorAll('button')).find(button => button.textContent === 'Kết nối bằng QR');
+    expect(qrButton).toBeDefined();
+    await act(async () => qrButton!.click());
+    expect(callNative).toHaveBeenCalledWith('google_begin', expect.objectContaining({ mode: 'broker' }));
+  } finally { await act(async () => root.unmount()); }
+});
+
 it('connects with the configured desktop OAuth client without showing credentials', async () => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   vi.mocked(isAndroid).mockReturnValue(false);

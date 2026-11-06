@@ -78,9 +78,47 @@ class PhotoImporter(private val context: Context, private val store: StateStore 
             return JSONObject().put("phase", "ready").put("location", location).put("sourceKind", "local").put("message", "Imported ${items.length()} photos to this device. Save this source to keep them.")
         } catch (e: Exception) { folder.deleteRecursively(); store.removeSession("import", id, pending); throw e }
     }
-    fun cancel(id: String) {
-        (context as? MainActivity)?.cancelImages(id)
-        val pending = store.takePending("import", id) ?: return
+    /** Picker selections are copied into a new immutable import; Save promotes it. */
+    fun importGoogle(id: String, picked: List<JSONObject>, account: String, connectionNonce: String, download: (String) -> ByteArray): JSONObject {
+        require(picked.isNotEmpty() && picked.size <= 50) { "Choose between 1 and 50 photos" }
+        fun ensureConnection() { check(store.session(GoogleConnections.TYPE, id)?.optString("nonce") == connectionNonce) { "Photos selection cancelled" } }
+        ensureConnection(); cancel(id)
+        val pending = store.beginPending("import", id, JSONObject().put("phase", "copying").put("account", account))
+        val location = "wallta-import://${Policy.hash(id)}/${pending.getString("nonce")}"
+        pending.put("location", location); store.saveSession("import", id, pending)
+        val folder = directory(context, location)
+        try {
+            synchronized(StateStore.lock) { ensureConnection(); check(folder.mkdirs()) { "Cannot create photo storage" } }
+            var total = 0L; val items = JSONArray()
+            for (item in picked) {
+                ensureConnection()
+                val file = item.getJSONObject("mediaFile")
+                require(file.optString("mimeType").startsWith("image/")) { "Only photos can be imported" }
+                val url = file.getString("baseUrl"); require(MediaSafety.photosUrl(url)) { "Google returned an unsafe image URL" }
+                val bytes = download(url)
+                require(bytes.isNotEmpty() && bytes.size <= 25 * 1024 * 1024) { "Selected image exceeds 25 MB" }
+                total += bytes.size; require(total <= 256L * 1024 * 1024) { "Import exceeds 256 MB. Choose fewer photos." }
+                val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }; BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+                require(bounds.outWidth > 0 && bounds.outHeight > 0 && bounds.outWidth.toLong() * bounds.outHeight <= 120_000_000) { "Selected file is not a supported image" }
+                val filename = "${Policy.hash(item.getString("id"))}.img"
+                synchronized(StateStore.lock) {
+                    ensureConnection(); check(store.session("import", id)?.optString("nonce") == pending.getString("nonce")) { "Photo import cancelled" }
+                    File(folder, filename).writeBytes(bytes)
+                }
+                LanImageValidator.validate(File(folder, filename))
+                items.put(JSONObject().put("file", filename).put("name", file.optString("filename", "Google Photos").take(256)))
+            }
+            ensureConnection(); pending.put("phase", "ready").put("items", items); store.saveSession("import", id, pending)
+            return JSONObject().put("phase", "ready").put("sourceKind", "local").put("location", location).put("account", account)
+                .put("message", "Imported ${items.length()} photos to this device. Save this source to keep them.")
+        } catch (e: Exception) { folder.deleteRecursively(); store.removeSession("import", id, pending); throw e }
+    }
+    fun cancel(id: String, expectedLocation: String? = null) {
+        if (expectedLocation == null) (context as? MainActivity)?.cancelImages(id)
+        val pending = synchronized(StateStore.lock) {
+            if (expectedLocation != null && store.get("importPending:$id")?.optString("location") != expectedLocation) return
+            store.takePending("import", id)
+        } ?: return
         pending.optString("location").takeIf { it.isNotEmpty() }?.let { directory(context, it).deleteRecursively() }
     }
     fun remove(id: String, location: String) {

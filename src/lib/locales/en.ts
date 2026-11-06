@@ -164,6 +164,7 @@ export const english: Record<string, string> = {
   "Client secret · nếu được Google cấp": "Client secret · if provided by Google",
   "Đã kết nối · Kết nối lại": "Connected · Reconnect",
   "Kết nối tài khoản Google": "Connect Google account",
+  "Kết nối bằng QR": "Connect with QR",
   "Nâng cao": "Advanced",
   "Đang kết nối…": "Connecting…",
   "Đang chọn ảnh…": "Selecting photos…",

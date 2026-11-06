@@ -2,6 +2,8 @@
 // Numbered placeholders capture native interpolation values in their original order.
 
 export const nativeEnglish: Record<string, string> = {
+  "Đang nhập ảnh đã chọn…": "Importing selected photos…",
+  "Không nhập được ảnh. Thử lại.": "Photo import failed. Try again.",
   "Chọn ảnh trên Google Photos rồi bấm Done. Giữ Wallta mở.": "Select photos in Google Photos, then click Done. Keep Wallta open.",
   "Chọn và bật một thư mục ảnh trước khi áp dụng.": "Select and enable an image folder before applying.",
   "Không thể áp dụng ảnh từ thư mục đã chọn.": "Could not apply an image from the selected folder.",

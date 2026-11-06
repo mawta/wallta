@@ -6,7 +6,7 @@ import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 
 export const repository = 'mawta/wallta';
-export const releaseNotes = 'Connect Google Drive and Google Photos on Windows without entering client credentials. A simpler source dialog groups optional settings under Advanced and clearly separates the connected account and imported photos. Google Photos selection now respects session polling and recovers from temporary connection failures, with retry and a browser fallback link. Google verification is pending.';
+export const releaseNotes = 'Connect Google on Android without entering a URL or credentials: phones use the system account chooser and Android TV uses QR sign-in. Save your Drive account first and choose multiple folders later. Google Photos Picker imports selected photos locally with background import polling and safe cancellation. Google verification is pending; real phone and TV acceptance testing remains necessary.';
 const readJson = async path => JSON.parse(await readFile(path,'utf8'));
 const sha256 = data => createHash('sha256').update(data).digest('hex');
 const requireValue = (value,message) => { if (!value) throw new Error(message); return value; };

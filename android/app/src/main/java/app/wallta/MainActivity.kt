@@ -15,6 +15,9 @@ class MainActivity : Activity() {
     private var folderReply: ((String?, String?) -> Unit)? = null
     private var photoReply: java.util.concurrent.CompletableFuture<List<Uri>>? = null
     private var photoSourceId: String? = null
+    private var googleReply: java.util.concurrent.CompletableFuture<Intent>? = null
+    private var googleSourceId: String? = null
+    private var googleRequestCode: Int? = null
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         if (!WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
@@ -53,9 +56,46 @@ class MainActivity : Activity() {
     fun cancelImages(sourceId: String) {
         runOnUiThread { if (photoSourceId == sourceId) { photoReply?.completeExceptionally(IllegalStateException("Photo import cancelled")); photoReply = null; photoSourceId = null; @Suppress("DEPRECATION") finishActivity(42) } }
     }
+    fun chooseGoogleAccount(sourceId: String): android.accounts.Account {
+        val intent = android.accounts.AccountManager.newChooseAccountIntent(null, null, arrayOf("com.google"), null, null, null, null)
+        val data = googlePrompt(sourceId, 43) { startActivityForResult(intent, 43) }
+        val name = data.getStringExtra(android.accounts.AccountManager.KEY_ACCOUNT_NAME)
+        val type = data.getStringExtra(android.accounts.AccountManager.KEY_ACCOUNT_TYPE)
+        check(!name.isNullOrBlank() && type == "com.google") { "Choose a Google account to continue" }
+        return android.accounts.Account(name, type)
+    }
+    fun resolveGoogleAuthorization(sourceId: String, pending: android.app.PendingIntent): Intent = googlePrompt(sourceId, 44) {
+        startIntentSenderForResult(pending.intentSender, 44, null, 0, 0, 0)
+    }
+    private fun googlePrompt(sourceId: String, code: Int, launch: () -> Unit): Intent {
+        val result = java.util.concurrent.CompletableFuture<Intent>()
+        runOnUiThread {
+            if (googleReply != null) { result.completeExceptionally(IllegalStateException("A Google account prompt is already open")); return@runOnUiThread }
+            googleReply = result; googleSourceId = sourceId; googleRequestCode = code
+            try { launch() } catch (e: Exception) { googleReply = null; googleSourceId = null; googleRequestCode = null; result.completeExceptionally(IllegalStateException("Google account chooser is unavailable. Use Connect with QR.", e)) }
+        }
+        return try { result.get(170, java.util.concurrent.TimeUnit.SECONDS) } finally {
+            runOnUiThread { if (googleReply === result) { googleReply = null; googleSourceId = null; googleRequestCode = null; @Suppress("DEPRECATION") finishActivity(code) } }
+        }
+    }
+    fun cancelGoogle(sourceId: String) {
+        runOnUiThread {
+            if (googleSourceId == sourceId) {
+                googleReply?.completeExceptionally(IllegalStateException("Google sign-in cancelled")); googleReply = null; googleSourceId = null
+                googleRequestCode?.let { @Suppress("DEPRECATION") finishActivity(it) }; googleRequestCode = null
+            }
+        }
+    }
     @Deprecated("Android activity result API")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode in listOf(43, 44)) {
+            if (googleRequestCode != requestCode) return
+            val reply = googleReply; googleReply = null; googleSourceId = null; googleRequestCode = null
+            if (resultCode == RESULT_OK && data != null) reply?.complete(data)
+            else reply?.completeExceptionally(IllegalStateException("Google sign-in cancelled"))
+            return
+        }
         if (requestCode == AndroidUpdater.INSTALL_REQUEST) {
             bridge?.installerResult(resultCode == RESULT_OK)
             return
@@ -78,6 +118,7 @@ class MainActivity : Activity() {
         catch (e: Exception) { reply?.invoke(null, "Could not retain folder permission. Choose another folder.") }
     }
     override fun onDestroy() {
+        googleReply?.completeExceptionally(IllegalStateException("Activity closed")); googleReply = null; googleSourceId = null; googleRequestCode = null
         photoReply?.completeExceptionally(IllegalStateException("Activity closed")); photoReply = null; photoSourceId = null
         folderReply?.invoke(null, "Activity closed"); folderReply = null; bridge?.close()
         if (::web.isInitialized) { web.stopLoading(); WebViewCompat.removeWebMessageListener(web, "WalltaAndroid"); web.destroy() }

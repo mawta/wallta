@@ -55,6 +55,8 @@ class StateStore(private val context: Context) {
         val old = root.optJSONObject("state")?.optJSONArray("sources") ?: JSONArray()
         val incoming = JSONObject(state.toString())
         val sources = incoming.getJSONArray("sources")
+        val replacedGoogle = mutableListOf<JSONObject>()
+        val replacedRelays = mutableListOf<JSONObject>()
         require(sources.length() <= 100) { "Maximum 100 sources" }
         val ids = mutableSetOf<String>()
         for (i in 0 until sources.length()) {
@@ -63,7 +65,9 @@ class StateStore(private val context: Context) {
             require(source.getString("kind") in listOf("local", "url", "manifest", "webdav", "drive", "photos"))
             require(source.getString("location").length <= 8192)
             SourceFolders.normalize(source)
-            SourceFolders.relayScope(source, root.optJSONObject("relayPending:${source.getString("id")}")?.takeIf { it.optString("phase") == "ready" } ?: root.optJSONObject("relay:${source.getString("id")}"))
+            val googleDrive = (root.optJSONObject("googleConnectionPending:${source.getString("id")}")?.takeIf { it.optString("phase") == "ready" }
+                ?: root.optJSONObject("googleConnection:${source.getString("id")}"))?.optString("kind") == "drive"
+            if (!googleDrive) SourceFolders.relayScope(source, root.optJSONObject("relayPending:${source.getString("id")}")?.takeIf { it.optString("phase") == "ready" } ?: root.optJSONObject("relay:${source.getString("id")}"))
             val previous = (0 until old.length()).map { old.getJSONObject(it) }.find { it.optString("id") == source.getString("id") }
             secretKeys.forEach { k -> if (!source.has(k) && previous?.optString("kind") == source.optString("kind") && previous.has(k)) source.put(k, previous.get(k)) }
         }
@@ -84,6 +88,21 @@ class StateStore(private val context: Context) {
         root.put("state", incoming).put("revision", root.optLong("revision") + 1)
         for (i in 0 until sources.length()) {
             val source = sources.getJSONObject(i); val id = source.getString("id")
+            val googleConnection = root.optJSONObject("googleConnectionPending:$id")
+            val matchingGoogle = googleConnection?.optString("phase") == "ready" &&
+                ((googleConnection.optString("kind") == "drive" && source.optString("kind") == "drive") ||
+                    (googleConnection.optString("kind") == "photos" && source.optString("kind") == "local" && source.optString("location") == googleConnection.optString("location")))
+            if (matchingGoogle) {
+                val active = root.optJSONObject("googleConnection:$id")
+                if (active?.optString("nonce") != googleConnection.optString("nonce")) {
+                    invalidateOwnedCache(root, id)
+                    if (active != null && active.optString("connectionToken") != googleConnection.optString("connectionToken")) replacedGoogle += active
+                }
+                googleConnection.put("pending", false); root.put("googleConnection:$id", googleConnection); root.remove("googleConnectionPending:$id")
+                source.put("google", (source.optJSONObject("google") ?: JSONObject()).put("account", googleConnection.optString("account"))
+                    .put("provider", googleConnection.optString("kind")).put("connected", true))
+                if (googleConnection.optString("kind") == "drive") root.optJSONObject("relay:$id")?.let { replacedRelays += it; root.remove("relay:$id") }
+            }
             val type = if (source.optString("kind") == "photos") "google" else if (source.optString("kind") == "drive") "relay" else if (source.optString("kind") == "local" && source.optString("location").startsWith("wallta-import://")) "import" else continue
             val pending = root.optJSONObject("${type}Pending:$id") ?: continue
             val location = if (type == "google") pending.optString("deviceId") else if (type == "import") pending.optString("location") else pending.optString("folder")
@@ -99,6 +118,8 @@ class StateStore(private val context: Context) {
             }
         }
         write(root)
+        replacedGoogle.forEach { GoogleConnections(context, this).cleanupAbandoned(it) }
+        replacedRelays.forEach { DriveRelay(this).cleanupAbandoned(it) }
         this.state(true)
     }
     /** Runs only under lock against the same root that save() will commit. Grants stay intact. */
@@ -139,14 +160,22 @@ class StateStore(private val context: Context) {
     fun put(key: String, value: JSONObject?) = synchronized(lock) { val r = read(); if (value == null) r.remove(key) else r.put(key, value); write(r) }
     fun beginPending(type: String, id: String, value: JSONObject): JSONObject = synchronized(lock) {
         val root = read(); val now = System.currentTimeMillis()
-        val pending = root.keys().asSequence().filter { it.startsWith("googlePending:") || it.startsWith("relayPending:") || it.startsWith("importPending:") }.toList()
+        fun isPending(key: String) = key.startsWith("googlePending:") || key.startsWith("relayPending:") || key.startsWith("importPending:") || key.startsWith("googleConnectionPending:")
+        val pending = root.keys().asSequence().filter { isPending(it) }.toList()
         val removedImports = mutableListOf<String>()
-        pending.filter { now - (root.optJSONObject(it)?.optLong("createdAt") ?: 0) > 60 * 60 * 1000 }.forEach { if (it.startsWith("importPending:")) root.getJSONObject(it).optString("location").takeIf { location -> location.isNotEmpty() }?.let { location -> removedImports += location }; root.remove(it) }
-        val remaining = root.keys().asSequence().filter { it.startsWith("googlePending:") || it.startsWith("relayPending:") || it.startsWith("importPending:") }.sortedBy { root.getJSONObject(it).optLong("createdAt") }.toList()
-        remaining.take((remaining.size - 31).coerceAtLeast(0)).forEach { if (it.startsWith("importPending:")) root.getJSONObject(it).optString("location").takeIf { location -> location.isNotEmpty() }?.let { location -> removedImports += location }; root.remove(it) }
+        val removedGoogle = mutableListOf<JSONObject>()
+        fun removePending(key: String) {
+            if (key.startsWith("importPending:")) root.getJSONObject(key).optString("location").takeIf { it.isNotEmpty() }?.let { removedImports += it }
+            if (key.startsWith("googleConnectionPending:")) removedGoogle += root.getJSONObject(key)
+            root.remove(key)
+        }
+        pending.filter { now - (root.optJSONObject(it)?.optLong("createdAt") ?: 0) > 60 * 60 * 1000 }.forEach { removePending(it) }
+        val remaining = root.keys().asSequence().filter { isPending(it) }.sortedBy { root.getJSONObject(it).optLong("createdAt") }.toList()
+        remaining.take((remaining.size - 31).coerceAtLeast(0)).forEach { removePending(it) }
         value.put("pending", true).put("nonce", java.util.UUID.randomUUID().toString()).put("createdAt", now)
         root.put("${type}Pending:$id", value); write(root)
         removedImports.forEach { location -> Net.cleanup { PhotoImporter.directory(context, location).deleteRecursively() } }
+        removedGoogle.forEach { value -> GoogleConnections(context, this).cleanupAbandoned(value) }
         value
     }
     fun session(type: String, id: String, activeOnly: Boolean = false): JSONObject? = synchronized(lock) {
@@ -157,6 +186,13 @@ class StateStore(private val context: Context) {
         val root = read(); val key = if (value.optBoolean("pending")) "${type}Pending:$id" else "$type:$id"
         check(root.optJSONObject(key)?.optString("nonce") == value.optString("nonce")) { "Google operation cancelled by a newer request" }
         root.put(key, value); write(root)
+    }
+    /** A token response can arrive after Save promoted the exact same nonce. */
+    fun updateSession(type: String, id: String, nonce: String, block: (JSONObject) -> Unit): JSONObject = synchronized(lock) {
+        val root = read()
+        val key = listOf("${type}Pending:$id", "$type:$id").firstOrNull { root.optJSONObject(it)?.optString("nonce") == nonce }
+            ?: error("Google operation cancelled by a newer request")
+        val value = root.getJSONObject(key); block(value); root.put(key, value); write(root); value
     }
     fun removeSession(type: String, id: String, value: JSONObject) = synchronized(lock) {
         val root = read(); val key = if (value.optBoolean("pending")) "${type}Pending:$id" else "$type:$id"

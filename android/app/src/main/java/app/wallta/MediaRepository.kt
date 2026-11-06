@@ -140,10 +140,11 @@ class MediaRepository(private val context: Context, private val store: StateStor
         return when (source.getString("kind")) {
             "webdav" -> { require(SourceFolders.contains(source, media.url)) { "Image is outside the active WebDAV origin/folder" }; mapOf("Authorization" to "Basic " + Base64.encodeToString("${source.optString("username")}:${source.optString("password")}".toByteArray(), Base64.NO_WRAP)) }
             "drive" -> {
-                val relay = DriveRelay(store).session(media.sourceId)?.takeIf { it.optString("phase") == "ready" }
+                val google = GoogleConnections(context, store).session(media.sourceId, true)?.takeIf { it.optString("kind") == "drive" && it.optString("phase") == "ready" }
+                val relay = if (google == null) DriveRelay(store).session(media.sourceId)?.takeIf { it.optString("phase") == "ready" } else null
                 val base = if (relay != null) "${relay.getString("relayUrl")}/api/drive/media/" else "https://www.googleapis.com/drive/v3/files/"
                 require(MediaSafety.within(media.url, base)) { "Image is outside the active Drive provider" }
-                (relay?.optString("token")?.takeIf { it.isNotBlank() } ?: source.optString("accessToken").takeIf { it.isNotBlank() })?.let { mapOf("Authorization" to "Bearer $it") } ?: emptyMap()
+                (if (google != null) GoogleConnections(context, store).token(media.sourceId) else relay?.optString("token")?.takeIf { it.isNotBlank() } ?: source.optString("accessToken").takeIf { it.isNotBlank() })?.let { mapOf("Authorization" to "Bearer $it") } ?: emptyMap()
             }
             "photos" -> { require(MediaSafety.photosUrl(media.url)) { "Photos image must use Google's media origin" }; mapOf("Authorization" to "Bearer " + (source.optString("accessToken").takeIf { it.isNotBlank() } ?: GoogleAmbient(context, store).token(media.sourceId))) }
             else -> emptyMap()
@@ -184,11 +185,13 @@ class MediaRepository(private val context: Context, private val store: StateStor
     }
     private fun drive(s: JSONObject): List<Media> {
         val roots = SourceFolders.locations(s).map { DriveRelay.folder(it) }
-        val key = s.optString("apiKey"); val token = s.optString("accessToken")
-        val relay = DriveRelay(store).session(s.getString("id"))?.takeIf { it.optString("phase") == "ready" }
-        require(relay != null || key.isNotBlank() || token.isNotBlank()) { "Connect a Drive relay, use a public API key, or supply an access token" }
+        val token = s.optString("accessToken")
+        val google = GoogleConnections(context, store).session(s.getString("id"), true)?.takeIf { it.optString("kind") == "drive" && it.optString("phase") == "ready" }
+        val key = if (google == null) s.optString("apiKey") else ""
+        val relay = if (google == null) DriveRelay(store).session(s.getString("id"))?.takeIf { it.optString("phase") == "ready" } else null
+        require(google != null || relay != null || key.isNotBlank() || token.isNotBlank()) { "Connect a Google Drive account first" }
         SourceFolders.relayScope(s, relay)
-        val credential = relay?.getString("token") ?: token
+        val credential = if (google != null) GoogleConnections(context, store).token(s.getString("id")) else relay?.getString("token") ?: token
         val headers = if (credential.isNotBlank()) mapOf("Authorization" to "Bearer $credential") else emptyMap()
         val items = linkedMapOf<String, Media>(); val folders = mutableSetOf<String>(); var requests = 0
         val deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(60)
@@ -326,6 +329,10 @@ class MediaRepository(private val context: Context, private val store: StateStor
                     !next.optBoolean("enabled", true) && next.optString("location").isBlank() && (next.optJSONArray("folders")?.length() ?: 0) == 0 &&
                     relay?.optString("phase") == "ready" && relay.optString("token").isNotBlank()
                 val freshDrive = next?.optString("kind") == "drive" && (relay?.optString("folder") == next.optString("location") || retainedDriveConnection)
+                val connection = GoogleConnections(context, store).session(id, true)
+                val freshConnection = connection != null && ((connection.optString("kind") == "drive" && next?.optString("kind") == "drive") ||
+                    (connection.optString("kind") == "photos" && next?.optString("kind") == "local" && next.optString("location") == connection.optString("location")))
+                if (connection != null && !freshConnection) GoogleConnections(context, store).disconnect(id)
                 if (!freshPhotos && !freshDrive && s.optString("kind") in listOf("photos", "drive")) GoogleAmbient(context, store).disconnect(id)
             }
             if (next != null && !next.optBoolean("enabled", true) && s.optString("kind") == "photos") clearSource(id)

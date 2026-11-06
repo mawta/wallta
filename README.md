@@ -21,7 +21,7 @@ The interface supports **English and Vietnamese**. It follows the device languag
 - **Control rotation:** shuffle through a full cycle before repeating, use sequential order, choose weekdays and overnight time windows, and set fit/fill/stretch, blurred backgrounds, cache limits, or Wi-Fi-only downloads.
 - **Preview and compare:** open a library photo at fit or 100% size. Drag the Before/After divider over an upscaled photo to inspect the same area; mouse, touch and TV controls are supported. New upscale results remember their original source. Older collections remain viewable even without original associations. [Preview guide](docs/photo-preview.md).
 - **Upscale to 4K:** use Fast mode on Windows, Android, and TV, or local AI on Windows. Run all eligible photos or select individual images. Results become a separate collection; originals stay untouched. [Upscaling guide](docs/upscaling.md).
-- **Import from Google Photos:** use the Picker API on Windows or the system/cloud photo picker on Android when available. TV album access uses the restricted Ambient API; see the Google requirements below.
+- **Import from Google Photos:** choose pictures with Google Photos Picker on Windows, Android or TV. Imported photos stay on your device; choose again whenever you want to replace the collection.
 - **Use a TV screensaver:** select Wallta in the system screensaver settings, with a separate slideshow interval and an optional clock.
 - **Manage storage and updates:** clear regenerable cache, remove individual upscaled collections, and check for app updates in Settings.
 
@@ -66,9 +66,9 @@ Relative image URLs resolve against the JSON URL. A direct image URL also works.
 
 ## Google setup and platform limits
 
-Drive and Windows/TV Photos integrations require your own Google Cloud credentials; none are bundled. Android's system photo picker does not need a Client ID. Public Drive folders use an API key. Private Drive uses desktop OAuth on Windows or an optional self-hosted HTTPS [Laravel relay](relay/README.md) on Android/TV. There is no preconfigured public relay. Saved Windows accounts can be reused when choosing or changing folders. See the [Google setup guide](docs/setup-google.md).
+Official installers include Wallta's Google connection configuration. Windows opens Google's browser sign-in. Android phones with Google Play services use the system account chooser; Android TV and devices without Play services use a QR code through Wallta's [Apps Script authorization service](google-apps-script/README.md). Users do not enter client credentials or a service URL. Save a Drive account first and choose or change multiple folders later under **Advanced**. Google's app verification is pending, so Google may show an unverified-app warning. Public Drive connections using an API key and custom builds are covered in the [Google setup guide](docs/setup-google.md).
 
-Google Photos imports on Windows and Android create local copies of selected photos; they **do not sync an album**. TV album access through Ambient requires approval in Google's Photos Partner Program and has not been validated with an approved project and a real TV. An ordinary Cloud project alone does not unlock Ambient.
+Google Photos imports create local copies of selected photos; they **do not sync an album**. The optional legacy Ambient integration requires Google's Photos Partner Program approval. QR sign-in stores account authorization tokens in private Apps Script storage; image data downloads directly from Google to your device. See the [privacy policy](https://mawta.github.io/wallta/privacy.html).
 
 Android's background wallpaper interval is at least **15 minutes**, and battery-saving policies can delay it. Slideshow/screensaver timing is separate. TV Home wallpaper and screensaver settings depend on the firmware and launcher; support is not guaranteed on every TV. Wallta does not replace the Home launcher. Devices with an outdated WebView may need an update before the app can run.
 

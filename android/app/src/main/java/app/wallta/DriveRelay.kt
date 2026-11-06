@@ -71,6 +71,7 @@ class DriveRelay(private val store: StateStore) {
             if (j.optString("token").isNotBlank()) runCatching { Net.bytes("$relay/api/connection", 1024 * 1024, mapOf("Authorization" to "Bearer ${j.getString("token")}"), "DELETE") }
         }
     }
+    internal fun cleanupAbandoned(j: JSONObject) { cleanupPending(j) }
     private fun persistOrCleanup(id: String, value: JSONObject): JSONObject {
         try { store.saveSession("relay", id, value) }
         catch (e: Exception) {
