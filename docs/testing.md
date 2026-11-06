@@ -8,6 +8,7 @@ The installed Android APK sent the literal `pageToken=null` when opening the fir
 
 - A regression using Android JSON on SDK 26/28 reproduced the old result (`"null"` instead of empty) before the fix. Additional coverage exercises a persisted QR connection through root, shared, nested and continuation folder requests.
 - Local checks passed 150 Android tests on SDK 26/28, with four existing FileProvider tests skipped on Windows because they require Unix path separators. All 115 frontend tests, the production web build, 17 Apps Script tests, 12 release-tool tests, version validation and tracked-file privacy checks passed.
+- [Android CI](https://github.com/mawta/wallta/actions/runs/42206009154) passed all **154 tests**, with zero failures or skips, and built the APK. The signed release APK was verified separately: package `app.wallta`, version `0.1.13`/versionCode `14`, minSdk `26`, and the existing release certificate. All 29 bundled web assets and the LAN page match the production sources after HTML/SVG line-ending normalization.
 - Live Google consent and broker token delivery succeeded. The exact old folder request returned **HTTP 400 / Invalid Value**; changing only its first-page token to empty or omitting it returned **HTTP 200**. Root, nested, shared and real continuation-page requests succeeded. The temporary test connection was disconnected afterward.
 - No physical Android TV/phone is connected for installation or remote-control acceptance testing.
 
