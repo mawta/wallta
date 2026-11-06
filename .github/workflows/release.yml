@@ -80,9 +80,12 @@ jobs:
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          WALLTA_GOOGLE_OAUTH_CLIENT_JSON: ${{ secrets.WALLTA_GOOGLE_OAUTH_CLIENT_JSON }}
         shell: pwsh
         run: |
           if ([string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY) -or [string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD)) { throw 'Both Tauri signing secrets are required' }
+          $googleClient = $env:WALLTA_GOOGLE_OAUTH_CLIENT_JSON | ConvertFrom-Json
+          if (-not $googleClient.installed.client_id.EndsWith('.apps.googleusercontent.com') -or [string]::IsNullOrWhiteSpace($googleClient.installed.client_secret)) { throw 'A valid desktop Google OAuth client is required' }
           npm run tauri -- build --target x86_64-pc-windows-msvc --bundles nsis --config scripts/tauri.release.json
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Stage exactly one installer and signature

@@ -2,6 +2,7 @@
 // Numbered placeholders capture native interpolation values in their original order.
 
 export const nativeEnglish: Record<string, string> = {
+  "Chọn ảnh trên Google Photos rồi bấm Done. Giữ Wallta mở.": "Select photos in Google Photos, then click Done. Keep Wallta open.",
   "Chọn và bật một thư mục ảnh trước khi áp dụng.": "Select and enable an image folder before applying.",
   "Không thể áp dụng ảnh từ thư mục đã chọn.": "Could not apply an image from the selected folder.",
   "Có quá nhiều kết nối đang chờ. Khởi động lại Wallta rồi thử lại.": "Too many connections are pending. Restart Wallta and try again.",
@@ -47,6 +48,11 @@ export const nativeEnglish: Record<string, string> = {
 };
 
 export const nativeVietnamese: Record<string, string> = {
+  "Google Photos selection expired. Reconnect and select photos again.": "Phiên chọn ảnh Google Photos đã hết hạn. Kết nối và chọn ảnh lại.",
+  "Could not check Google Photos. Check the connection and retry.": "Không kiểm tra được Google Photos. Kiểm tra mạng rồi thử lại.",
+  "Google Photos returned HTTP {0}. Reconnect Google Photos.": "Google Photos trả về HTTP {0}. Kết nối Google Photos lại.",
+  "Google Photos returned an invalid response.": "Google Photos trả về phản hồi không hợp lệ.",
+  "Could not open Google Photos. Use the link in Wallta.": "Không mở được Google Photos. Dùng liên kết trong Wallta.",
   "Select at most 50 unique local images.": "Chọn tối đa 50 ảnh cục bộ không trùng nhau.",
   "Selected images must belong to an enabled local source. Refresh the library.": "Ảnh đã chọn phải thuộc một nguồn cục bộ đang bật. Hãy làm mới thư viện.",
   "At most 100 sources are supported. Remove a source before adding received images.": "Hỗ trợ tối đa 100 nguồn. Xóa bớt nguồn trước khi thêm ảnh nhận được.",

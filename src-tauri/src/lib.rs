@@ -140,6 +140,7 @@ pub fn run() {
             lan_commands::lan_status,
             lan_commands::lan_stop,
             lan_commands::lan_accept,
+            google::google_default_client_available,
             google::google_begin,
             google::google_poll,
             google::google_cancel,

@@ -15,6 +15,11 @@ it('can save a connected account without a folder and choose one after reopening
   const source = { id: 'saved', name: 'Drive', kind: 'drive' as const, location: '', enabled: false, recursive: true, google: { provider: 'drive' as const, connected: true, account: 'test@example.com' } };
   try {
     await act(async () => root.render(<SourceDialog initial={source} onSave={saved} onClose={vi.fn()} busy={false} />));
+    const advanced = host.querySelector<HTMLDetailsElement>('details.google-advanced')!;
+    expect(advanced).not.toBeNull();
+    expect(advanced.open).toBe(false);
+    expect(advanced.textContent).toContain('Chọn / đổi thư mục');
+    expect(advanced.querySelector('input[type="password"]')).not.toBeNull();
     await act(async () => host.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })));
     expect(saved).toHaveBeenCalledWith(expect.objectContaining({ location: '', enabled: false }), expect.objectContaining({ apply: false }));
     await act(async () => root.render(null));
@@ -47,4 +52,28 @@ it('keeps folder selection optional after completing a new Drive login', async (
     await act(async () => host.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })));
     expect(saved).toHaveBeenCalledWith(expect.objectContaining({ location: '', enabled: false, google: expect.objectContaining({ connected: true }) }), expect.objectContaining({ apply: false }));
   } finally { await act(async () => root.unmount()); host.remove(); }
+});
+
+it('keeps desktop Photos on the Picker flow until the selected photos have been imported', async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  HTMLDialogElement.prototype.showModal = function () { this.setAttribute('open', ''); };
+  HTMLDialogElement.prototype.close = function () {};
+  vi.mocked(callNative).mockReset().mockImplementation(async command => {
+    if (command === 'google_default_client_available') return true as never;
+    return { phase: 'ready', sourceKind: 'local', location: 'photos-import' } as never;
+  });
+  const host = document.createElement('div');
+  const root = createRoot(host);
+  const saved = vi.fn().mockResolvedValue(true);
+  try {
+    await act(async () => root.render(<SourceDialog initialKind="photos" busy={false} onSave={saved} onClose={vi.fn()} />));
+    const submitButton = host.querySelector<HTMLButtonElement>('button[type="submit"]')!;
+    expect(host.querySelector('details[open] input[type="password"]')).toBeNull();
+    expect(host.querySelector('details.connection-help')).toBeNull();
+    expect(submitButton.disabled).toBe(true);
+    await act(async () => Array.from(host.querySelectorAll('button')).find(button => button.textContent === 'Kết nối tài khoản Google')!.click());
+    expect(submitButton.disabled).toBe(false);
+    await act(async () => host.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })));
+    expect(saved).toHaveBeenCalledWith(expect.objectContaining({ kind: 'local', location: 'photos-import', google: expect.objectContaining({ provider: 'photos' }) }), expect.objectContaining({ apply: true }));
+  } finally { await act(async () => root.unmount()); }
 });

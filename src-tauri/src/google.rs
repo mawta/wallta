@@ -586,7 +586,7 @@ fn connect(
         client
             .post("https://photospicker.googleapis.com/v1/sessions")
             .bearer_auth(&credential.access_token)
-            .json(&json!({})),
+            .json(&json!({"pickingConfig":{"maxItemCount":"500"}})),
     )?;
     let picker_id = picker["id"]
         .as_str()
@@ -614,6 +614,73 @@ fn connect(
 }
 fn urlencoding_segment(value: &str) -> String {
     url::form_urlencoded::byte_serialize(value.as_bytes()).collect()
+}
+fn picker_poll_schedule(
+    picker: &Value,
+    now: Instant,
+    deadline: Instant,
+) -> Result<(u64, Instant), String> {
+    let duration = |key: &str| {
+        picker["pollingConfig"][key]
+            .as_str()?
+            .strip_suffix('s')?
+            .parse::<f64>()
+            .ok()
+            .and_then(|seconds| Duration::try_from_secs_f64(seconds).ok())
+    };
+    let expires = duration("timeoutIn")
+        .and_then(|timeout| now.checked_add(timeout))
+        .unwrap_or(deadline)
+        .min(deadline);
+    if expires <= now {
+        return Err("Google Photos selection expired. Reconnect and select photos again.".into());
+    }
+    let interval = duration("pollInterval").unwrap_or(Duration::from_secs(5));
+    let seconds = interval
+        .as_secs()
+        .saturating_add(u64::from(interval.subsec_nanos() > 0));
+    Ok((seconds.max(1), expires))
+}
+
+fn read_picker_session(
+    client: &reqwest::blocking::Client,
+    endpoint: &str,
+    access_token: &str,
+    session: &Session,
+    deadline: Instant,
+) -> Result<Value, String> {
+    for attempt in 0..3 {
+        check_cancel(session, deadline)?;
+        let response = client.get(endpoint).bearer_auth(access_token).send();
+        let retryable = match &response {
+            Ok(response) => {
+                response.status().is_server_error()
+                    || [408, 429].contains(&response.status().as_u16())
+            }
+            Err(error) => error.is_timeout() || error.is_connect() || error.is_request(),
+        };
+        if retryable && attempt < 2 {
+            wait(session, 1 << attempt, deadline)?;
+            continue;
+        }
+        let response = response
+            .map_err(|_| "Could not check Google Photos. Check the connection and retry.")?;
+        let status = response.status().as_u16();
+        if status == 404 || status == 410 {
+            return Err(
+                "Google Photos selection expired. Reconnect and select photos again.".into(),
+            );
+        }
+        if !response.status().is_success() {
+            return Err(format!(
+                "Google Photos returned HTTP {status}. Reconnect Google Photos."
+            ));
+        }
+        let bytes = providers::bounded_response(response, 4 * 1024 * 1024)?;
+        return serde_json::from_slice(&bytes)
+            .map_err(|_| "Google Photos returned an invalid response.".into());
+    }
+    unreachable!()
 }
 fn import_directory(root: &std::path::Path, source_id: &str) -> PathBuf {
     root.join("google-import")
@@ -730,23 +797,45 @@ fn import_picker(
     {
         return Err("Invalid Google Photos selection host.".into());
     }
-    set_status(session,GoogleStatus {phase:"selecting".into(),verification_url:Some(picker_url.clone()),poll_interval_seconds:5,message:"Chọn những ảnh muốn nhập trên Google Photos. Bộ ảnh này được lưu vào thiết bị; không tự đồng bộ album.".into(),..Default::default()});
-    let _ = open::that(&picker_url);
+    let (_, mut selection_deadline) = picker_poll_schedule(picker, Instant::now(), deadline)?;
+    let message = if open::that(&picker_url).is_ok() {
+        "Chọn ảnh trên Google Photos rồi bấm Done. Giữ Wallta mở."
+    } else {
+        "Could not open Google Photos. Use the link in Wallta."
+    };
+    set_status(
+        session,
+        GoogleStatus {
+            phase: "selecting".into(),
+            verification_url: Some(picker_url.clone()),
+            poll_interval_seconds: 2,
+            message: message.into(),
+            account: account.clone(),
+            ..Default::default()
+        },
+    );
+    let endpoint = format!(
+        "https://photospicker.googleapis.com/v1/sessions/{}",
+        urlencoding_segment(picker_id)
+    );
     let mut selection = picker.clone();
     while !selection["mediaItemsSet"].as_bool().unwrap_or(false) {
-        let interval = selection["pollingConfig"]["pollInterval"]
-            .as_str()
-            .and_then(|v| v.trim_end_matches('s').parse::<f64>().ok())
-            .unwrap_or(5.0)
-            .ceil() as u64;
-        wait(session, interval.max(1), deadline)?;
-        selection = read_json(
-            client
-                .get(format!(
-                    "https://photospicker.googleapis.com/v1/sessions/{}",
-                    urlencoding_segment(picker_id)
-                ))
-                .bearer_auth(&credential.access_token),
+        let (interval, expires) =
+            picker_poll_schedule(&selection, Instant::now(), selection_deadline)?;
+        selection_deadline = expires;
+        wait(session, interval, selection_deadline).map_err(|error| {
+            if session.cancelled.load(Ordering::SeqCst) {
+                error
+            } else {
+                "Google Photos selection expired. Reconnect and select photos again.".into()
+            }
+        })?;
+        selection = read_picker_session(
+            client,
+            &endpoint,
+            &credential.access_token,
+            session,
+            selection_deadline,
         )?;
     }
     set_status(
@@ -861,6 +950,37 @@ fn import_picker(
     );
     Ok(())
 }
+#[derive(Deserialize)]
+struct DesktopClientFile {
+    installed: DesktopClient,
+}
+
+#[derive(Deserialize)]
+struct DesktopClient {
+    client_id: String,
+    client_secret: String,
+}
+
+fn configured_desktop_client() -> Option<DesktopClient> {
+    // Native desktop clients are distributed with the app. This is not a server secret.
+    // Keep the source and frontend free of client values; CI supplies them at compile time.
+    let config: DesktopClientFile = if let Some(path) =
+        std::env::var_os("WALLTA_GOOGLE_OAUTH_CLIENT_FILE")
+    {
+        serde_json::from_reader(std::io::BufReader::new(std::fs::File::open(path).ok()?)).ok()?
+    } else {
+        serde_json::from_str(option_env!("WALLTA_GOOGLE_OAUTH_CLIENT_JSON")?).ok()?
+    };
+    let client = config.installed;
+    (client.client_id.ends_with(".apps.googleusercontent.com") && !client.client_secret.is_empty())
+        .then_some(client)
+}
+
+#[tauri::command]
+pub fn google_default_client_available() -> bool {
+    configured_desktop_client().is_some()
+}
+
 #[tauri::command]
 pub async fn google_begin(
     source_id: String,
@@ -877,6 +997,13 @@ pub async fn google_begin(
     {
         return Err("Invalid Google source.".into());
     }
+    let (client_id, client_secret) = if client_id.is_empty() && client_secret.is_empty() {
+        configured_desktop_client()
+            .map(|client| (client.client_id, client.client_secret))
+            .unwrap_or_default()
+    } else {
+        (client_id, client_secret)
+    };
     if !client_id.ends_with(".apps.googleusercontent.com") {
         return Err("Nhập OAuth Client ID loại Desktop app từ Google Cloud Console.".into());
     }
@@ -947,6 +1074,61 @@ pub async fn google_disconnect(source_id: String) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn picker_polling_obeys_fractional_interval_and_expiration() {
+        let now = Instant::now();
+        let deadline = now + Duration::from_secs(900);
+        let picker = json!({"pollingConfig":{"pollInterval":"3.5s","timeoutIn":"12s"}});
+        let (interval, expires) = picker_poll_schedule(&picker, now, deadline).unwrap();
+        assert_eq!(interval, 4);
+        assert_eq!(expires, now + Duration::from_secs(12));
+        assert!(
+            picker_poll_schedule(&json!({"pollingConfig":{"timeoutIn":"0s"}}), now, deadline)
+                .is_err()
+        );
+        let (_, expires) = picker_poll_schedule(
+            &json!({"pollingConfig":{"timeoutIn":"9999s"}}),
+            now,
+            deadline,
+        )
+        .unwrap();
+        assert_eq!(expires, deadline);
+    }
+
+    #[test]
+    fn picker_polling_retries_server_errors_without_losing_the_session() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            for status in [503, 200] {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut request = [0u8; 4096];
+                let count = stream.read(&mut request).unwrap();
+                assert!(String::from_utf8_lossy(&request[..count]).starts_with("GET /session "));
+                let body = if status == 200 {
+                    r#"{"mediaItemsSet":true}"#
+                } else {
+                    "{}"
+                };
+                write!(stream, "HTTP/1.1 {status} Test\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+            }
+        });
+        let session = pending_session(None, Instant::now());
+        let selected = read_picker_session(
+            &providers::client().unwrap(),
+            &format!("http://{address}/session"),
+            "test-token",
+            &session,
+            Instant::now() + Duration::from_secs(10),
+        )
+        .unwrap();
+        assert_eq!(selected["mediaItemsSet"], true);
+        assert!(!session.cancelled.load(Ordering::SeqCst));
+        server.join().unwrap();
+    }
     fn pending_session(directory: Option<PathBuf>, started: Instant) -> Arc<Session> {
         Arc::new(Session {
             status: Mutex::new(GoogleStatus::default()),

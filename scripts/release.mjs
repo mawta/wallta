@@ -6,7 +6,7 @@ import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 
 export const repository = 'mawta/wallta';
-export const releaseNotes = 'Large photo previews with fit and 100% viewing. Compare original and upscaled images in one aligned frame using a draggable Before/After divider, touch or keyboard/TV controls. New upscale results remember their original association after reopening. Older collections remain previewable without inventing missing originals.';
+export const releaseNotes = 'Connect Google Drive and Google Photos on Windows without entering client credentials. A simpler source dialog groups optional settings under Advanced and clearly separates the connected account and imported photos. Google Photos selection now respects session polling and recovers from temporary connection failures, with retry and a browser fallback link. Google verification is pending.';
 const readJson = async path => JSON.parse(await readFile(path,'utf8'));
 const sha256 = data => createHash('sha256').update(data).digest('hex');
 const requireValue = (value,message) => { if (!value) throw new Error(message); return value; };

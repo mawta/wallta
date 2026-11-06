@@ -79,7 +79,7 @@ it('shows both providers in Settings and opens their saved sources after closing
   const buttons = Array.from(host.querySelectorAll('button')).filter(b => b.textContent === 'Quản lý');
   await act(async () => buttons[1].click());
   expect(host.querySelector('dialog')!.textContent).toContain('photos@example.com');
-  expect(host.querySelector('dialog')!.textContent).toContain('Chọn lại ảnh Google Photos');
+  expect(host.querySelector('dialog')!.textContent).toContain('Chọn lại ảnh');
 });
 
 it('opens imported Photos from the Photos new-source screen without a second login', async () => {
@@ -89,7 +89,7 @@ it('opens imported Photos from the Photos new-source screen without a second log
   expect(dialog.textContent).toContain('photos@example.com');
   expect(dialog.textContent).not.toContain('saved@example.com');
   await click('Dùng kết nối', dialog);
-  expect(host.querySelector('dialog')!.textContent).toContain('Chọn lại ảnh Google Photos');
+  expect(host.querySelector('dialog')!.textContent).toContain('Chọn lại ảnh');
   expect(callNative).not.toHaveBeenCalledWith('google_begin', expect.anything());
 });
 

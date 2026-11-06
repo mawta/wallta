@@ -1,17 +1,17 @@
 # Thiết lập Google cho Wallta
 
-Không có secret dùng chung trong Git hay bộ cài. Chủ ứng dụng tạo Google Cloud project, cấu hình consent screen, bật API cần dùng và thêm tài khoản thử nghiệm nếu dự án còn Testing. Tài khoản chỉ nhìn thấy dữ liệu được cấp quyền. Token nhập tay chỉ dùng để thử; hết hạn cần nhập lại.
+Bản Windows chính thức có sẵn OAuth client Desktop của Wallta: bấm kết nối và đăng nhập trong trình duyệt, không cần tự nhập Client ID/secret. Hồ sơ Google đang chờ duyệt; có thể xuất hiện cảnh báo ứng dụng chưa được xác minh. Tài khoản chỉ nhìn thấy dữ liệu được cấp quyền. Các mục dưới dành cho bản tự build, relay hoặc cấu hình riêng. Token nhập tay chỉ dùng để thử; hết hạn cần nhập lại.
 
-Trong app: **Nguồn ảnh → Thêm nguồn ảnh → Google Drive / Google Photos → Cách kết nối · lấy API key / Client ID**. Hướng dẫn có thể thu gọn, không cần rời app để đọc. Các bước bên dưới đối chiếu tài liệu Google ngày 27/10/2026.
+Nếu app yêu cầu cấu hình thủ công, chọn **Hướng dẫn cấu hình** trong form Google Drive hoặc Google Photos để mở tài liệu này. Các bước bên dưới đối chiếu tài liệu Google ngày 27/10/2026.
 
 Local, USB và **Gửi / nhận qua Wi-Fi** không cần Google Cloud, key hay tài khoản Google. Google Photos qua trình chọn ảnh trên điện thoại Android cũng không cần Client ID.
 
 | Muốn kết nối | Cần tạo / chuẩn bị | Nhập trong Wallta |
 |---|---|---|
-| Drive công khai | Drive API + API key | Link thư mục + Google API key trong Thông tin kết nối |
-| Drive riêng, Windows | Drive API + OAuth Desktop app | OAuth Client ID / secret nếu được cấp; chọn thư mục sau |
+| Drive công khai | Drive API + API key | Link thư mục + Google API key trong Nâng cao |
+| Drive riêng, Windows | Bản cài chính thức | Bấm kết nối; chọn thư mục sau |
 | Drive riêng, Android / TV | Relay HTTPS + OAuth Web application | Link thư mục + địa chỉ Wallta Drive Relay |
-| Photos, Windows | Photos Picker API + OAuth Desktop app | OAuth Client ID / secret nếu được cấp |
+| Photos, Windows | Bản cài chính thức | Bấm kết nối và chọn ảnh |
 | Photos, điện thoại Android | Trình chọn ảnh hệ thống / cloud provider | Bấm kết nối và chọn ảnh, không nhập key |
 | Album Photos tự đổi trên TV | Quyền Ambient từ Partner Program + OAuth TVs and Limited Input devices | Client ID / secret; Device ID nhận được sau kết nối |
 
@@ -28,19 +28,19 @@ Local, USB và **Gửi / nhận qua Wi-Fi** không cần Google Cloud, key hay t
 
 ## Google Drive công khai
 
-Bật Google Drive API, tạo API key giới hạn cho API này, chia sẻ thư mục phù hợp. Thêm nguồn Drive với link `/drive/folders/ID` hoặc ID, mở Thông tin kết nối và nhập API key. Thư mục công khai vẫn cần API key để gọi API liệt kê. Không suy luận danh sách ảnh từ HTML của Drive.
+Bật Google Drive API, tạo API key giới hạn cho API này, chia sẻ thư mục phù hợp. Thêm nguồn Drive với link `/drive/folders/ID` hoặc ID, mở Nâng cao và nhập API key. Thư mục công khai vẫn cần API key để gọi API liệt kê. Không suy luận danh sách ảnh từ HTML của Drive.
 
 1. Bật [Google Drive API](https://console.cloud.google.com/apis/library/drive.googleapis.com).
 2. **APIs & Services → Credentials → Create credentials → API key**. Mở key vừa tạo, **API restrictions → Restrict key → Google Drive API**.
 3. Key này gọi từ bản cài, không phải website. Không đặt giới hạn HTTP referrer rồi mong bản cài dùng được. Nếu giới hạn theo IP, IP phải khớp thiết bị/mạng gọi API; không chia sẻ key ra ngoài phạm vi sử dụng.
 4. Trên Drive, **Share → General access → Anyone with the link → Viewer**. Chỉ chọn cách này nếu chủ động muốn người có link xem được ảnh. Kiểm tra quyền các file bên trong thư mục.
-5. Trong Wallta, điền tên nguồn và link thư mục. Mở **Thông tin kết nối**, dán vào **Google API key · thư mục công khai**, rồi thêm nguồn.
+5. Trong Wallta, điền tên nguồn và link thư mục. Mở **Nâng cao**, dán vào **Google API key · thư mục công khai**, rồi thêm nguồn.
 
 Không cần OAuth Client ID cho cách này. Với ảnh riêng, giữ thư mục riêng và dùng OAuth/relay bên dưới.
 
 ## Google Drive riêng trên Windows
 
-Tạo OAuth client loại **Desktop app**. Trong nguồn Drive, nhập OAuth Client ID và client secret nếu Google cấp. Bấm **Kết nối tài khoản Google**, cấp quyền đọc Drive trong trình duyệt rồi **Lưu kết nối**. Không cần chọn thư mục ngay. Callback loopback `http://127.0.0.1:<port>/oauth/callback` dùng PKCE và state. Refresh token lưu trong Windows Credential Manager sau khi lưu nguồn thành công.
+Bản chính thức dùng sẵn client của Wallta. Bản tự build chưa cấu hình client sẽ hiện ô OAuth Client ID và client secret của loại **Desktop app**. Bấm **Kết nối tài khoản Google**, cấp quyền đọc Drive trong trình duyệt rồi **Lưu kết nối**. Không cần chọn thư mục ngay. Callback loopback `http://127.0.0.1:<port>/oauth/callback` dùng PKCE và state. Refresh token lưu trong Windows Credential Manager sau khi lưu nguồn thành công.
 
 Tài khoản đã lưu nằm ở **Cài đặt → Tài khoản đã kết nối → Quản lý**. Khi mở **Thêm nguồn → Google Drive**, chọn **Dùng kết nối** để mở lại tài khoản cũ, không cần nhập lại Client ID/secret. Bấm **Chọn / đổi thư mục** bất cứ lúc nào rồi **Lưu & áp dụng**. Form đăng nhập trống dành cho kết nối mới, không biểu thị kết nối cũ bị mất. Google Photos đã nhập cũng xuất hiện trong danh sách tài khoản để mở lại bộ ảnh hoặc chọn lại ảnh.
 
@@ -96,3 +96,9 @@ Windows: kết nối Google Drive → chọn thư mục → **Lưu & áp dụng*
 Google Photos trên Windows lưu bản sao bộ ảnh đã chọn và giữ nhãn Google Photos sau khi nhập. **Chọn lại ảnh** trên nguồn đã lưu để thay bộ ảnh. Hủy lần chọn mới giữ nguyên bộ ảnh cũ. Không tự theo dõi ảnh mới trong album Google Photos có sẵn; cần tính năng này hãy dùng thư mục Drive.
 
 Android/TV Drive vẫn chọn link thư mục trước khi cấp quyền relay. TV Photos dùng album qua Ambient khi project đã được Google cấp quyền.
+
+## Build Windows với client mặc định
+
+CI phát hành đọc GitHub Actions secret `WALLTA_GOOGLE_OAUTH_CLIENT_JSON`: nội dung JSON tải từ OAuth client loại **Desktop app**, có trường `installed.client_id` và `installed.client_secret`. Cung cấp cùng biến môi trường khi compile Rust để build riêng. Để chạy thử local, có thể đặt `WALLTA_GOOGLE_OAUTH_CLIENT_FILE` trỏ tới file JSON ngoài repo. Không commit giá trị hoặc file credential.
+
+OAuth Desktop client được phân phối trong mã native của bộ cài và không thể giữ bí mật như client phía server. Access/refresh token riêng của người dùng vẫn lưu trong Windows Credential Manager. Không dùng Web application client/secret của relay cho bộ cài.

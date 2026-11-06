@@ -3,9 +3,28 @@ import { act, useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { expect, it, vi } from 'vitest';
 import { GoogleConnect } from './GoogleConnect';
-import { callNative } from '../lib/native';
+import { callNative, isAndroid } from '../lib/native';
 
-vi.mock('../lib/native', () => ({ isNative: () => true, isAndroid: () => true, errorMessage: (error: unknown) => String(error), callNative: vi.fn() }));
+vi.mock('../lib/native', () => ({ isNative: () => true, isAndroid: vi.fn(() => true), errorMessage: (error: unknown) => String(error), callNative: vi.fn() }));
+
+it('connects with the configured desktop OAuth client without showing credentials', async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  vi.mocked(isAndroid).mockReturnValue(false);
+  vi.mocked(callNative).mockReset().mockImplementation(async command => (
+    command === 'google_default_client_available' ? true : { phase: 'ready', sourceKind: 'drive' }
+  ) as never);
+  const host = document.createElement('div');
+  const root = createRoot(host);
+  try {
+    await act(async () => root.render(<GoogleConnect source={{ id: 'drive', name: 'Drive', kind: 'drive', location: '', enabled: true, recursive: false }} onConnected={vi.fn()} />));
+    expect(host.querySelectorAll('input')).toHaveLength(0);
+    await act(async () => host.querySelector('button')!.click());
+    expect(callNative).toHaveBeenCalledWith('google_begin', expect.objectContaining({ clientId: '', clientSecret: '' }));
+  } finally {
+    await act(async () => root.unmount());
+    vi.mocked(isAndroid).mockReturnValue(true);
+  }
+});
 
 it('continues polling Google while parent state refreshes and callbacks change', async () => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true }); vi.useFakeTimers();
@@ -49,4 +68,27 @@ it('cancels authorization that starts after the source form has already closed',
   await act(async () => finish({ phase: 'authorizing' }));
   expect(callNative).toHaveBeenCalledWith('google_cancel', { sourceId: 'late', discardImports: true });
   host.remove();
+});
+
+it('can restart an unfinished picker session when Google Photos fails at Done', async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  vi.mocked(isAndroid).mockReturnValue(false);
+  vi.mocked(callNative).mockReset().mockImplementation(async command => {
+    if (command === 'google_default_client_available') return true as never;
+    return { phase: 'selecting', pollIntervalSeconds: 5 } as never;
+  });
+  const host = document.createElement('div');
+  const root = createRoot(host);
+  try {
+    await act(async () => root.render(<GoogleConnect source={{ id: 'retry', name: 'Photos', kind: 'photos', location: '', enabled: true, recursive: false }} onConnected={vi.fn()} />));
+    await act(async () => host.querySelector('button')!.click());
+    const retry = Array.from(host.querySelectorAll('button')).find(button => button.textContent === 'Thử lại');
+    expect(retry).toBeDefined();
+    await act(async () => retry!.click());
+    expect(callNative).toHaveBeenCalledWith('google_cancel', { sourceId: 'retry', discardImports: true });
+    expect(vi.mocked(callNative).mock.calls.filter(([name]) => name === 'google_begin')).toHaveLength(2);
+  } finally {
+    await act(async () => root.unmount());
+    vi.mocked(isAndroid).mockReturnValue(true);
+  }
 });
