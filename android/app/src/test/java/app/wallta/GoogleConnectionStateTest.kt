@@ -22,6 +22,39 @@ class GoogleConnectionStateTest {
     }
     private fun source(id: String, kind: String = "drive", location: String = "") = JSONObject().put("id", id).put("name", "Google").put("kind", kind).put("location", location).put("enabled", location.isNotBlank())
 
+    @Test fun savedQrConnectionListsRootSharedNestedAndContinuationPages() = withStore { store ->
+        store.beginPending("googleConnection", "d", JSONObject().put("kind", "drive").put("phase", "ready").put("mode", "broker")
+            .put("account", "a@example.com").put("connectionToken", "b".repeat(64)).put("brokerUrl", GoogleConnections.BROKER_URL))
+        store.save(store.state().put("sources", JSONArray().put(source("d"))))
+        val urls = mutableListOf<String>()
+        var tokenRequests = 0
+        val google = GoogleConnections(RuntimeEnvironment.getApplication(), store, brokerRequest = { _, body, _ ->
+            assertEquals("token", body.getString("action")); tokenRequests++
+            JSONObject().put("accessToken", "access").put("kind", "drive").put("account", "a@example.com")
+                .put("expiresAt", System.currentTimeMillis() / 1000 + 3600)
+        }, googleRequest = { url, headers, method, _, _ ->
+            urls += url; assertEquals("Bearer access", headers["Authorization"]); assertEquals("GET", method)
+            JSONObject().put("files", JSONArray().put(JSONObject().put("id", "folder1").put("name", "Folder"))).put("nextPageToken", "opaque/next+=page")
+        })
+        fun list(parent: String, shared: Boolean, token: Any) = google.folders("d", parent,
+            GoogleConnectionPolicy.pageToken(JSONObject().put("pageToken", token)), shared)
+        assertEquals("folder1", list("root", false, JSONObject.NULL).getJSONArray("folders").getJSONObject(0).getString("id"))
+        list("root", true, JSONObject.NULL)
+        list("folder1", false, JSONObject.NULL)
+        val next = list("root", false, "opaque/next+=page")
+        assertEquals("opaque/next+=page", next.getString("nextPageToken"))
+        fun query(url: String) = java.net.URI(url).rawQuery.split('&').associate {
+            val pair = it.split('=', limit = 2)
+            pair[0] to java.net.URLDecoder.decode(pair.getOrElse(1) { "" }, "UTF-8")
+        }
+        assertEquals(listOf("", "", "", "opaque/next+=page"), urls.map { query(it)["pageToken"] })
+        assertTrue(query(urls[0])["q"]!!.endsWith("'root' in parents"))
+        assertTrue(query(urls[1])["q"]!!.endsWith("sharedWithMe"))
+        assertTrue(query(urls[2])["q"]!!.endsWith("'folder1' in parents"))
+        assertEquals(1, tokenRequests)
+        assertEquals("a@example.com", store.session("googleConnection", "d", true)?.getString("account"))
+    }
+
     @Test fun failedOldImportCannotCancelAReplacementImport() = withStore { store ->
         val context = RuntimeEnvironment.getApplication()
         val oldLocation = "wallta-import://${Policy.hash("p")}/11111111-1111-1111-1111-111111111111"

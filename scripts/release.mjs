@@ -6,7 +6,7 @@ import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 
 export const repository = 'mawta/wallta';
-export const releaseNotes = 'Connect Google on Android without entering a URL or credentials: phones use the system account chooser and Android TV uses QR sign-in. Save your Drive account first and choose multiple folders later. Google Photos Picker imports selected photos locally with background import polling and safe cancellation. Google verification is pending; real phone and TV acceptance testing remains necessary.';
+export const releaseNotes = 'Fix Google Drive folder selection returning HTTP 400 in the Android APK, including Android TV after QR sign-in from another device. Existing Google connections and saved folders are preserved; no Apps Script changes or reconnection are required.';
 const readJson = async path => JSON.parse(await readFile(path,'utf8'));
 const sha256 = data => createHash('sha256').update(data).digest('hex');
 const requireValue = (value,message) => { if (!value) throw new Error(message); return value; };

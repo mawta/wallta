@@ -4,6 +4,8 @@ import org.json.JSONObject
 import java.net.URI
 
 object GoogleConnectionPolicy {
+    // Android's optString turns an explicit JSON null into the literal "null".
+    fun pageToken(args: JSONObject): String = if (args.isNull("pageToken")) "" else args.getString("pageToken")
     fun brokerData(response: JSONObject): JSONObject {
         check(response.optBoolean("ok")) { response.optJSONObject("error")?.optString("message")?.take(300)?.takeIf { it.isNotBlank() } ?: "Google connection service is unavailable. Try again." }
         return response.optJSONObject("data") ?: error("Google connection service returned an invalid response")

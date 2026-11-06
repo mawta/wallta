@@ -62,7 +62,7 @@ class WalltaBridge(private val activity: MainActivity, private val web: WebView)
                     "google_default_client_available" -> true
                     "google_begin" -> { authorizationIds.add(args.getString("sourceId")); GoogleConnections(activity, store).begin(args) }
                     "google_poll" -> GoogleConnections(activity, store).poll(args.getString("sourceId"))
-                    "google_drive_folders" -> GoogleConnections(activity, store).folders(args.getString("sourceId"), args.optString("parentId", "root"), args.optString("pageToken"), args.optBoolean("shared"))
+                    "google_drive_folders" -> GoogleConnections(activity, store).folders(args.getString("sourceId"), args.optString("parentId", "root"), GoogleConnectionPolicy.pageToken(args), args.optBoolean("shared"))
                     "google_drive_select" -> GoogleConnections(activity, store).select(args.getString("sourceId"), args.getString("folderId"))
                     "google_disconnect" -> { GoogleConnections(activity, store).disconnect(args.getString("sourceId")); GoogleAmbient(activity, store).disconnect(args.getString("sourceId")); JSONObject.NULL }
                     "google_cancel" -> { GoogleConnections(activity, store).cancel(args.getString("sourceId")); GoogleAmbient(activity, store).cancel(args.getString("sourceId")); repo.releaseUnusedGrants(); JSONObject.NULL }

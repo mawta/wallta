@@ -2,6 +2,15 @@
 
 Đối chiếu mã nguồn và bằng chứng thực thi; CI build không thay thế kiểm tra trên thiết bị. Windows chưa ký Authenticode; APK từ 0.1.2 dùng khóa phát hành cố định.
 
+## Android Drive folder selection in 0.1.13
+
+The installed Android APK sent the literal `pageToken=null` when opening the first folder page. Android's `JSONObject.optString` converts an explicit JSON null to the string `"null"`; the frontend intentionally sends JSON null when there is no continuation token. The native bridge now normalizes absent/null tokens to an empty first-page token and preserves real continuation tokens exactly. This applies to phone and TV, including TV connections authorized by scanning QR on another device. Existing accounts and folder selections require no migration or reauthorization.
+
+- A regression using Android JSON on SDK 26/28 reproduced the old result (`"null"` instead of empty) before the fix. Additional coverage exercises a persisted QR connection through root, shared, nested and continuation folder requests.
+- Local checks passed 150 Android tests on SDK 26/28, with four existing FileProvider tests skipped on Windows because they require Unix path separators. All 115 frontend tests, the production web build, 17 Apps Script tests, 12 release-tool tests, version validation and tracked-file privacy checks passed.
+- Live Google consent and broker token delivery succeeded. The exact old folder request returned **HTTP 400 / Invalid Value**; changing only its first-page token to empty or omitting it returned **HTTP 200**. Root, nested, shared and real continuation-page requests succeeded. The temporary test connection was disconnected afterward.
+- No physical Android TV/phone is connected for installation or remote-control acceptance testing.
+
 ## Android Google accounts and TV QR in 0.1.12
 
 - Local verification passed **148 Android tests** on SDK 26/28, debug APK build, **115 frontend tests**, production build, **17 Apps Script protocol tests** and **12 release-tool tests**.
