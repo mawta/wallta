@@ -2,6 +2,16 @@
 
 Đối chiếu mã nguồn và bằng chứng thực thi; CI build không thay thế kiểm tra trên thiết bị. Windows chưa ký Authenticode; APK từ 0.1.2 dùng khóa phát hành cố định.
 
+## Google sign-in and source dialog in 0.1.11
+
+- **172 Rust tests** (155 library and 17 behavior tests), zero failures or skips, and Windows installer build passed in [Windows CI](https://github.com/mawta/wallta/actions/runs/42193249833).
+- **122 Android tests**, zero failures or skips, and APK build passed in [Android CI](https://github.com/mawta/wallta/actions/runs/42193249757).
+- **110 frontend tests**, production build and **12 release-tool tests** passed. Regressions cover retrying a pending Google connection, stale poll responses, optional Advanced controls and imported Photos saving.
+- Browser checks covered the imported Photos card in English/Vietnamese at desktop and 390px widths. Windows sign-in and Photos selection/import were exercised with a real account during preparation.
+- Official Windows releases embed the Desktop OAuth client in native code. CI receives its JSON from an Actions secret; runtime demo files and account credentials are excluded from Git. Google verification is pending.
+
+Native Windows release checks cover fractional picker polling, expiration, recovery after a temporary server failure and protected saved imports. Live Android/TV Google flows, real-device install/upgrade and wallpaper/reboot were not rerun for this release. [Google setup and platform differences](setup-google.md).
+
 ## Photo preview in 0.1.10
 
 - **170 Rust tests** (153 library and 17 behavior tests) and Windows installer build passed in [Windows CI](https://github.com/mawta/wallta/actions/runs/41377320684). Tests cover saved 4K bytes/dimensions, persisted original associations, disabled sources, legacy/missing originals, identity preservation, cache clearing during an in-flight request and collection deletion.
