@@ -55,6 +55,34 @@ class GoogleConnectionStateTest {
         assertEquals("a@example.com", store.session("googleConnection", "d", true)?.getString("account"))
     }
 
+    @Test fun choosingFoldersForSavedQrAccountDoesNotInvalidateTheNewCatalog() = withStore { store ->
+        val repo = MediaRepository(RuntimeEnvironment.getApplication(), store)
+        val id = "drive"
+        val connection = store.beginPending("googleConnection", id, JSONObject()
+            .put("kind", "drive").put("phase", "ready").put("mode", "broker").put("account", "a@example.com"))
+        store.save(store.state().put("sources", JSONArray().put(source(id))))
+        val previous = store.state()
+        val oldImage = Policy.hash("old")
+        repo.cacheFile(oldImage).writeText("old cached image")
+        store.put("cacheOwners", JSONObject().put(oldImage, JSONObject().put("source", id)))
+
+        val saved = store.save(store.state().put("sources", JSONArray().put(source(id, location = "chosen-folder"))))
+        assertFalse(repo.cacheFile(oldImage).exists())
+        val scanRevision = store.revision()
+        val scanEpoch = store.get("cacheEpoch")?.getLong("value")
+        val image = Media(Policy.hash("new"), "Photo.jpg", "https://www.googleapis.com/drive/v3/files/new?alt=media", id)
+        repo.cacheFile(image.id).writeText("new cached image")
+        store.put("cacheOwners", JSONObject().put(image.id, JSONObject().put("source", id)))
+        store.put("catalog:$id", JSONObject().put("time", System.currentTimeMillis()).put("items", JSONArray().put(image.json())))
+
+        repo.cleanup(previous, saved)
+
+        assertEquals("Folder cleanup must not cancel a scan of the saved source", scanRevision, store.revision())
+        assertEquals(scanEpoch, store.get("cacheEpoch")?.getLong("value"))
+        assertEquals(connection.getString("nonce"), store.session("googleConnection", id, true)?.getString("nonce"))
+        assertEquals(listOf(image.id), repo.list().map { it.id })
+    }
+
     @Test fun failedOldImportCannotCancelAReplacementImport() = withStore { store ->
         val context = RuntimeEnvironment.getApplication()
         val oldLocation = "wallta-import://${Policy.hash("p")}/11111111-1111-1111-1111-111111111111"

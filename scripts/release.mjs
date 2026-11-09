@@ -6,7 +6,7 @@ import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 
 export const repository = 'mawta/wallta';
-export const releaseNotes = 'Fix Google Drive folder selection returning HTTP 400 in the Android APK, including Android TV after QR sign-in from another device. Existing Google connections and saved folders are preserved; no Apps Script changes or reconnection are required.';
+export const releaseNotes = 'Fix Save & apply on Android and Android TV after choosing folders for a saved Google Drive account. Background cleanup could cancel the new photo scan and show an empty library. Update in place, then open the saved source and apply it again.';
 const readJson = async path => JSON.parse(await readFile(path,'utf8'));
 const sha256 = data => createHash('sha256').update(data).digest('hex');
 const requireValue = (value,message) => { if (!value) throw new Error(message); return value; };

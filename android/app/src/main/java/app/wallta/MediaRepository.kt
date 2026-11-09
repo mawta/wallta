@@ -319,7 +319,8 @@ class MediaRepository(private val context: Context, private val store: StateStor
         for (i in 0 until b.length()) {
             val s = b.getJSONObject(i); val id = s.getString("id"); val next = now.find { it.optString("id") == id }
             if (next == null || next.optString("location") != s.optString("location") || next.optString("kind") != s.optString("kind")) {
-                clearSource(id)
+                // StateStore.save invalidated the old cache before publishing this change.
+                // A scan may already be using the new configuration.
                 // Generated legacy images are durable collections. Disconnecting a
                 // source must leave their files for the explicit folder-delete flow.
                 if (s.optString("location").startsWith("wallta-import://") && UpscaleCollections.legacyJob(s) == null) PhotoImporter(context, store).remove(id, s.getString("location"))
@@ -328,14 +329,14 @@ class MediaRepository(private val context: Context, private val store: StateStor
                 val retainedDriveConnection = s.optString("kind") == "drive" && next?.optString("kind") == "drive" &&
                     !next.optBoolean("enabled", true) && next.optString("location").isBlank() && (next.optJSONArray("folders")?.length() ?: 0) == 0 &&
                     relay?.optString("phase") == "ready" && relay.optString("token").isNotBlank()
-                val freshDrive = next?.optString("kind") == "drive" && (relay?.optString("folder") == next.optString("location") || retainedDriveConnection)
                 val connection = GoogleConnections(context, store).session(id, true)
-                val freshConnection = connection != null && ((connection.optString("kind") == "drive" && next?.optString("kind") == "drive") ||
-                    (connection.optString("kind") == "photos" && next?.optString("kind") == "local" && next.optString("location") == connection.optString("location")))
+                val freshGoogleDrive = connection?.optString("kind") == "drive" && next?.optString("kind") == "drive"
+                val retainedGoogleDrive = s.optString("kind") == "drive" && freshGoogleDrive
+                val freshDrive = next?.optString("kind") == "drive" && (retainedGoogleDrive || relay?.optString("folder") == next.optString("location") || retainedDriveConnection)
+                val freshConnection = freshGoogleDrive || (connection?.optString("kind") == "photos" && next?.optString("kind") == "local" && next.optString("location") == connection.optString("location"))
                 if (connection != null && !freshConnection) GoogleConnections(context, store).disconnect(id)
                 if (!freshPhotos && !freshDrive && s.optString("kind") in listOf("photos", "drive")) GoogleAmbient(context, store).disconnect(id)
             }
-            if (next != null && !next.optBoolean("enabled", true) && s.optString("kind") == "photos") clearSource(id)
         }
         releaseUnusedGrants()
     }
