@@ -38,6 +38,7 @@ class WalltaBridge(private val activity: MainActivity, private val web: WebView)
                     "get_photo_preview" -> repo.photoPreview(args.getString("id"), args.getString("sourceId"))
                     "get_preview" -> { val mediaId = args.getString("id"); val media = repo.list().find { it.id == mediaId } ?: error("Image no longer available"); repo.visual(media); "${TrustedWebView.origin}/media/${media.id}.img" }
                     "next_wallpaper" -> try { val state = WallpaperEngine.apply(activity, true, args.optString("sourceId").takeIf { it.isNotBlank() }, args.optBoolean("startRunning")); WallpaperWorker.schedule(activity); state } catch (e: Exception) { store.mutateState { it.put("error", e.message ?: "Wallpaper update failed") }; throw e }
+                    "next_lock_wallpaper" -> WallpaperEngine.applyLock(activity, manual = true)
                     "get_capabilities" -> capabilities()
                     "update_status" -> updater.status()
                     "update_check" -> updater.check(args.optBoolean("automatic", false))
@@ -49,7 +50,7 @@ class WalltaBridge(private val activity: MainActivity, private val web: WebView)
                     "upscale_models" -> JSONArray()
                     "upscale_storage" -> upscale.storage()
                     "upscale_clear_cache" -> upscale.clearCache()
-                    "upscale_delete_collection" -> upscale.deleteCollection(args.getString("collectionId"))
+                    "upscale_delete_collection" -> upscale.deleteCollection(args.getString("collectionId")).also { WallpaperWorker.schedule(activity) }
                     "upscale_status" -> upscale.status()
                     "upscale_cancel" -> upscale.cancel(args.optString("jobId").takeIf { it.isNotBlank() })
                     "upscale_save" -> upscale.save(args.getString("jobId"))
@@ -80,7 +81,7 @@ class WalltaBridge(private val activity: MainActivity, private val web: WebView)
         val wallpaper = wm.isWallpaperSupported && wm.isSetWallpaperAllowed
         return JSONObject().put("platform", if (tv) "android-tv" else "android").put("wallpaper", wallpaper).put("screensaver", true).put("minIntervalSeconds", 900)
             .put("notes", JSONArray().put("Android schedules wallpaper changes at a minimum of 15 minutes; Doze and OEM power rules can delay execution. Screensaver slides use their own shorter interval.")
-                .put(if (tv) "Home wallpaper depends on TV firmware and launcher. Even when the Android API reports support, visually confirm it on Home. Wallta does not replace your launcher." else "Choose Wallta in Android Screensaver settings to enable its slideshow.")
+                .put(if (tv) "Home wallpaper depends on TV firmware and launcher. Even when the Android API reports support, visually confirm it on Home. Wallta does not replace your launcher." else "Launchers such as Daijishō display their own background.")
                 .put("A firmware DocumentsProvider is needed to choose local or USB folders. USB access resumes only when the same storage remains mounted."))
     }
     private fun reply(id: String, success: Boolean, value: Any?) {

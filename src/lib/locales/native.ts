@@ -531,5 +531,8 @@ export const nativeVietnamese: Record<string, string> = {
   "Saved {0} images.": "Đã lưu {0} ảnh.",
   "Saved {0} images; skipped {1}.": "Đã lưu {0} ảnh; bỏ qua {1}.",
   "No usable image in {0} candidates": "Không có ảnh dùng được trong {0} ảnh đã thử",
-  "No usable image in {0} candidates: {1}": "Không có ảnh dùng được trong {0} ảnh đã thử: {1}"
+  "No usable image in {0} candidates: {1}": "Không có ảnh dùng được trong {0} ảnh đã thử: {1}",
+  "Choose a lock screen source first.": "Chọn nguồn cho màn hình khóa trước.",
+  "This device does not allow lock screen wallpaper changes.": "Thiết bị này không cho phép đổi hình nền màn hình khóa.",
+  "Launchers such as Daijishō display their own background.": "Một số launcher như Daijishō hiển thị ảnh nền riêng.",
 };

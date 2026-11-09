@@ -1,5 +1,5 @@
 import { t, useLocale, type LanguagePreference } from '../lib/i18n';
-import { ArrowUpRight, HardDrive, Monitor, ShieldCheck, Info, Play } from 'lucide-react';
+import { ArrowUpRight, HardDrive, LockKeyhole, Monitor, ShieldCheck, Info, Play } from 'lucide-react';
 import { callNative, isNative } from '../lib/native';
 import { SectionTitle, SettingRow, Toggle } from '../components/ui';
 import type { AppState, Capabilities, Source } from '../lib/types';
@@ -8,9 +8,11 @@ import { AppUpdates } from '../components/AppUpdates';
 import { SavedGoogleConnections } from '../components/SavedGoogleConnections';
 import { UpscaleStorage } from '../components/UpscaleStorage';
 
-export function SettingsPage({ state, capabilities, onSave, busy, perform, updates, onManageSource, upscaleActive, onStorageChanged }: { state: AppState; capabilities: Capabilities | null; onSave: (state: AppState) => Promise<unknown>; busy: boolean; perform: (fn: () => Promise<void>) => Promise<unknown>; notify: (text: string, error?: boolean) => void; updates: UpdatesController; onManageSource: (source: Source) => void; upscaleActive: boolean; onStorageChanged: () => unknown }) {
+export function SettingsPage({ state, capabilities, onSave, busy, perform, notify, updates, onManageSource, upscaleActive, onStorageChanged }: { state: AppState; capabilities: Capabilities | null; onSave: (state: AppState) => Promise<unknown>; busy: boolean; perform: (fn: () => Promise<void>) => Promise<unknown>; notify: (text: string, error?: boolean) => void; updates: UpdatesController; onManageSource: (source: Source) => void; upscaleActive: boolean; onStorageChanged: () => unknown }) {
   const { preference, setPreference } = useLocale();
   const update = (settings: Partial<AppState['settings']>) => void onSave({ ...state, settings: { ...state.settings, ...settings } });
+  const lockSources = state.sources.filter(source => source.enabled);
+  const lockSourceId = lockSources.find(source => source.id === state.settings.lockSourceId)?.id ?? '';
   return <>
     <SectionTitle title={t("Cài đặt")} />
     <section className="panel settings-panel"><SettingRow title={t('Ngôn ngữ')}><select aria-label={t('Ngôn ngữ')} value={preference} onChange={event => setPreference(event.target.value as LanguagePreference)}><option value="system">{t('Theo thiết bị')}</option><option value="en">English</option><option value="vi">Tiếng Việt</option></select></SettingRow></section>
@@ -21,6 +23,21 @@ export function SettingsPage({ state, capabilities, onSave, busy, perform, updat
       <SettingRow title={t("Chỉ tải ảnh qua Wi-Fi")}><Toggle checked={state.settings.wifiOnly} label={t("Chỉ tải ảnh qua Wi-Fi")} onChange={() => update({ wifiOnly: !state.settings.wifiOnly })} disabled={busy || !capabilities?.platform.startsWith('android')} /></SettingRow>
       {capabilities?.screensaver && <SettingRow title={t("Screensaver của TV")} description={t("Chọn Wallta trong menu hệ thống.")}><button className="button secondary" onClick={() => void perform(async () => { await callNative('open_screensaver_settings'); })}><Play size={15} />{t("Thiết lập")}</button></SettingRow>}
     </section>
+    {capabilities?.platform === 'android' && capabilities.wallpaper && <section className="panel settings-panel">
+      <h3><LockKeyhole size={18} /> {t("Màn hình khóa")}</h3>
+      <SettingRow title={t("Nguồn màn hình khóa")}>
+        <select aria-label={t("Nguồn màn hình khóa")} value={lockSourceId} disabled={busy || !lockSources.length} style={{ maxWidth: 'min(48vw, 320px)' }} onChange={event => update({ lockSourceId: event.target.value })}>
+          <option value="">{t("Tắt")}</option>
+          {lockSources.map(source => <option key={source.id} value={source.id}>{source.name}</option>)}
+        </select>
+      </SettingRow>
+      {lockSourceId && <SettingRow title={t("Dùng lịch tự đổi ảnh")}>
+        <button className="button secondary" disabled={busy} onClick={() => void perform(async () => {
+          await callNative('next_lock_wallpaper');
+          notify(t("Đã đổi hình nền màn hình khóa."));
+        })}>{t("Đổi ảnh khóa ngay")}</button>
+      </SettingRow>}
+    </section>}
     <section className="panel settings-panel"><h3><HardDrive size={18} /> {t("Lưu trữ")}</h3>
       <SettingRow title={t("Giới hạn cache")}><select aria-label={t("Giới hạn bộ nhớ cache")} value={state.settings.cacheLimitMb} onChange={event => update({ cacheLimitMb: Number(event.target.value) })} disabled={busy}>{[64,128,256,512,1024,2048].map(value => <option key={value} value={value}>{value >= 1024 ? `${value / 1024} GB` : `${value} MB`}</option>)}</select></SettingRow>
       <UpscaleStorage active={busy || upscaleActive} onChanged={onStorageChanged} />

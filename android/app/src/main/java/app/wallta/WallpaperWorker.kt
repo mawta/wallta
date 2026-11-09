@@ -14,6 +14,7 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -44,17 +45,37 @@ object Rotation {
 }
 
 object WallpaperEngine {
+    private val lockScreenApply = Any()
+
     fun allowed(settings: JSONObject) = Policy.inSchedule(settings.optBoolean("scheduleEnabled"), settings.optJSONArray("days")?.let { a -> (0 until a.length()).map { a.getInt(it) }.toSet() } ?: emptySet(), settings.optString("startTime", "07:00"), settings.optString("endTime", "23:00"), LocalDateTime.now())
-    fun apply(context: Context, manual: Boolean = false, sourceId: String? = null, startRunning: Boolean = false): JSONObject {
+    fun apply(context: Context, manual: Boolean = false, sourceId: String? = null, startRunning: Boolean = false): JSONObject =
+        applyTo(context, manual, WallpaperManager.FLAG_SYSTEM, sourceId, startRunning)
+
+    fun applyLock(context: Context, manual: Boolean = false): JSONObject = synchronized(lockScreenApply) {
+        applyTo(context, manual, WallpaperManager.FLAG_LOCK)
+    }
+
+    private fun applyTo(context: Context, manual: Boolean, target: Int, sourceId: String? = null, startRunning: Boolean = false): JSONObject {
         val store = StateStore(context); val snapshot = synchronized(StateStore.lock) { store.state() to store.revision() }
         val initial = snapshot.first; val revision = snapshot.second; val settings = initial.getJSONObject("settings")
         if (!manual && (!initial.optBoolean("running") || !allowed(settings))) return store.state(true)
+        val lockScreen = target == WallpaperManager.FLAG_LOCK
+        val lockSource = if (lockScreen) StateStore.lockSourceId(initial) else null
+        if (lockScreen && lockSource == null) {
+            require(!manual) { "Choose a lock screen source first." }
+            return store.state(true)
+        }
+        val rotationKey = if (lockScreen) "lockRotation" else "rotation"
         val manager = WallpaperManager.getInstance(context)
-        require(manager.isWallpaperSupported && manager.isSetWallpaperAllowed) { "Firmware does not permit changing the Home wallpaper. Use Wallta in Screensaver settings." }
+        require(manager.isWallpaperSupported && manager.isSetWallpaperAllowed) {
+            if (lockScreen) "This device does not allow lock screen wallpaper changes."
+            else "Firmware does not permit changing the Home wallpaper. Use Wallta in Screensaver settings."
+        }
         fun ensureCurrent() = synchronized(StateStore.lock) { check(store.revision() == revision && (manual || store.state().optBoolean("running")) && !Thread.currentThread().isInterrupted) { "Wallpaper operation cancelled by a newer setting" } }
-        val repo = MediaRepository(context, store); val items = MediaSafety.forSource(repo.list(), sourceId)
+        val repo = MediaRepository(context, store)
+        val items = if (lockSource != null) repo.list(sourceIds = setOf(lockSource)) else MediaSafety.forSource(repo.list(), sourceId)
         require(items.isNotEmpty()) { "Thư mục đã chọn chưa có ảnh khả dụng." }
-        val loaded = Rotation.loadUsable(store, items, settings, ensureCurrent = ::ensureCurrent, discard = { bitmap: Bitmap -> bitmap.recycle() }) { candidate ->
+        val loaded = Rotation.loadUsable(store, items, settings, key = rotationKey, ensureCurrent = ::ensureCurrent, discard = { bitmap: Bitmap -> bitmap.recycle() }) { candidate ->
             val file = repo.image(candidate)
             render(file.absolutePath, settings.optString("fit", "fill"), manager.desiredMinimumWidth.coerceIn(720, 2560), manager.desiredMinimumHeight.coerceIn(720, 2560), settings.optBoolean("blurBackground"))
         }
@@ -62,9 +83,10 @@ object WallpaperEngine {
         try {
             synchronized(StateStore.lock) {
                 ensureCurrent()
-                val result = manager.setBitmap(bitmap, null, true, WallpaperManager.FLAG_SYSTEM)
+                val result = manager.setBitmap(bitmap, null, true, target)
                 check(result != 0) { "Firmware rejected the wallpaper" }
-                Rotation.consumed(store, items, media)
+                Rotation.consumed(store, items, media, key = rotationKey)
+                if (lockScreen) return store.state(true)
                 return store.mutateState { it.put("current", media.json()).put("lastChanged", Instant.now().toString()).put("error", JSONObject.NULL); if (startRunning) it.put("running", true) }
             }
         } finally { bitmap.recycle() }
@@ -96,12 +118,32 @@ class WallpaperWorker(context: Context, params: WorkerParameters) : CoroutineWor
     }
     companion object {
         private const val name = "wallta-wallpaper"
-        fun schedule(context: Context) {
+        private const val lockName = "wallta-lock-wallpaper"
+        fun schedule(context: Context): Unit = synchronized(StateStore.lock) {
             val state = StateStore(context).state(); val wm = WorkManager.getInstance(context)
-            if (!state.optBoolean("running")) { wm.cancelUniqueWork(name); return }
+            val running = state.optBoolean("running")
+            if (!running) wm.cancelUniqueWork(name)
+            val rotateLock = running && StateStore.lockSourceId(state) != null
+            if (!rotateLock) wm.cancelUniqueWork(lockName)
+            if (!running) return@synchronized
             val seconds = state.getJSONObject("settings").optLong("intervalSeconds", 900).coerceAtLeast(900)
             val work = PeriodicWorkRequestBuilder<WallpaperWorker>(seconds, TimeUnit.SECONDS).setInitialDelay(seconds, TimeUnit.SECONDS).build()
             wm.enqueueUniquePeriodicWork(name, ExistingPeriodicWorkPolicy.UPDATE, work)
+            if (rotateLock) {
+                val lockWork = PeriodicWorkRequestBuilder<LockWallpaperWorker>(seconds, TimeUnit.SECONDS).setInitialDelay(seconds, TimeUnit.SECONDS).build()
+                wm.enqueueUniquePeriodicWork(lockName, ExistingPeriodicWorkPolicy.UPDATE, lockWork)
+            }
         }
+    }
+}
+
+class LockWallpaperWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
+    override suspend fun doWork(): Result {
+        try {
+            runInterruptible(Dispatchers.IO) { WallpaperEngine.applyLock(applicationContext) }
+            return Result.success()
+        }
+        catch (e: kotlinx.coroutines.CancellationException) { throw e }
+        catch (_: Exception) { return if (runAttemptCount < 2) Result.retry() else Result.success() }
     }
 }

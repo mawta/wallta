@@ -6,7 +6,7 @@ import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 
 export const repository = 'mawta/wallta';
-export const releaseNotes = 'Fix Save & apply on Android and Android TV after choosing folders for a saved Google Drive account. Background cleanup could cancel the new photo scan and show an empty library. Update in place, then open the saved source and apply it again.';
+export const releaseNotes = 'Android: choose an existing source under Settings → Lock screen, then change the lock screen now or rotate it on your wallpaper schedule. Wallta also clarifies that launchers such as Daijishō display their own background.';
 const readJson = async path => JSON.parse(await readFile(path,'utf8'));
 const sha256 = data => createHash('sha256').update(data).digest('hex');
 const requireValue = (value,message) => { if (!value) throw new Error(message); return value; };

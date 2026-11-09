@@ -29,6 +29,7 @@ export interface Settings {
   startTime: string;
   endTime: string;
   showClock: boolean;
+  lockSourceId: string;
 }
 export interface AppState {
   version: 1;
@@ -49,7 +50,7 @@ export interface Capabilities {
 export const defaultSettings: Settings = {
   intervalSeconds: 900, slideshowSeconds: 30, order: 'shuffle', fit: 'fill', blurBackground: false,
   autostart: false, wifiOnly: false, cacheLimitMb: 256,
-  scheduleEnabled: false, days: [0, 1, 2, 3, 4, 5, 6], startTime: '07:00', endTime: '23:00', showClock: false,
+  scheduleEnabled: false, days: [0, 1, 2, 3, 4, 5, 6], startTime: '07:00', endTime: '23:00', showClock: false, lockSourceId: '',
 };
 export const emptyState: AppState = { version: 1, sources: [], settings: defaultSettings, running: false, current: null, lastChanged: null, error: null };
 export const sourceLabels: Record<SourceKind, string> = { local: 'Thư mục thiết bị', url: 'Link ảnh', manifest: 'Thư mục online', webdav: 'WebDAV', drive: 'Google Drive', photos: 'Google Photos' };

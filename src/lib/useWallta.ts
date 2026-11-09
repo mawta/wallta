@@ -1,7 +1,7 @@
 import { t } from './i18n';
 import { cloneJson } from './compat';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { callNative, errorMessage, isNative } from './native';
+import { callNative, errorMessage, isAndroid, isNative } from './native';
 import { isWithinSchedule } from './rules';
 import { emptyState, defaultSettings, type AppState, type Capabilities, type MediaItem } from './types';
 import type { Source } from './types';
@@ -62,7 +62,7 @@ export function useWallta() {
     const changed = normalize(await callNative<AppState>('next_wallpaper'));
     setState(changed);
     if (changed.error) { notify(changed.error, true); return; }
-    notify(isNative() ? t("Đã cập nhật hình nền.") : t("Đã đổi ảnh trong bản xem trước."));
+    notify(isAndroid() ? t("Đã đổi hình nền Android.") : isNative() ? t("Đã cập nhật hình nền.") : t("Đã đổi ảnh trong bản xem trước."));
   }), [perform, notify]);
   const toggle = () => perform(async () => {
     if (!state.running && !media.length) throw new Error(t("Thêm ít nhất một nguồn có ảnh trước khi bật tự động."));

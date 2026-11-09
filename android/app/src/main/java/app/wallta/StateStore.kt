@@ -19,6 +19,16 @@ class StateStore(private val context: Context) {
         val lock = Any()
         private val secretKeys = listOf("username", "password", "apiKey", "accessToken")
         private const val alias = "wallta-state-v1"
+
+        fun lockSourceId(state: JSONObject): String? {
+            val id = state.getJSONObject("settings").optString("lockSourceId")
+            if (id.isBlank()) return null
+            val sources = state.getJSONArray("sources")
+            return id.takeIf { (0 until sources.length()).any { i ->
+                val source = sources.getJSONObject(i)
+                source.optString("id") == id && source.optBoolean("enabled", true)
+            } }
+        }
     }
     private val file = AtomicFile(File(context.filesDir, "state.enc"))
     private fun key(): SecretKey {
@@ -82,6 +92,7 @@ class StateStore(private val context: Context) {
         settings.put("intervalSeconds", settings.optLong("intervalSeconds", 900).coerceIn(900, 604800))
         settings.put("slideshowSeconds", settings.optInt("slideshowSeconds", 30).coerceIn(5, 86400))
         settings.put("cacheLimitMb", settings.optInt("cacheLimitMb", 256).coerceIn(16, 2048))
+        settings.put("lockSourceId", lockSourceId(incoming).orEmpty())
         // UI state cannot forge native wallpaper success.
         incoming.put("current", root.optJSONObject("state")?.opt("current") ?: JSONObject.NULL)
         incoming.put("lastChanged", root.optJSONObject("state")?.opt("lastChanged") ?: JSONObject.NULL)
@@ -146,6 +157,7 @@ class StateStore(private val context: Context) {
         removed.forEach { id -> invalidateOwnedCache(root, id); root.remove("import:$id"); root.remove("importPending:$id") }
         if (state.optJSONObject("current")?.optString("sourceId") in removed) state.put("current", JSONObject.NULL).put("running", false)
         state.put("sources", kept)
+        state.getJSONObject("settings").put("lockSourceId", lockSourceId(state).orEmpty())
         root.put("state", state).put("revision", root.optLong("revision") + 1)
         write(root)
     }

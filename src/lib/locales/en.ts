@@ -381,5 +381,11 @@ export const english: Record<string, string> = {
   "Không khả dụng": "Unavailable",
   "Khả dụng": "Available",
   "Nền Home tùy launcher. Áp dụng thử rồi về Home để kiểm tra.": "Home wallpaper support depends on the launcher. Apply it, then go Home to check.",
+  "Màn hình khóa": "Lock screen",
+  "Nguồn màn hình khóa": "Lock screen source",
+  "Dùng lịch tự đổi ảnh": "Uses the wallpaper schedule",
+  "Đổi ảnh khóa ngay": "Change lock screen now",
+  "Đã đổi hình nền màn hình khóa.": "Lock screen wallpaper updated.",
+  "Đã đổi hình nền Android.": "Android wallpaper updated.",
   "Mở kho mã Wallta": "Open Wallta repository"
 };

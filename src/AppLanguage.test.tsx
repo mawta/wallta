@@ -80,3 +80,35 @@ it('opens a library photo in a full-sized native preview without starting the sl
   expect(host.querySelector('img[src="/cache/full.jpg"]')).not.toBeNull();
   expect(host.querySelector('.slideshow')).toBeNull();
 });
+
+it('remembers an Android lock screen source and uses the dedicated apply action', async () => {
+  const previous = vi.mocked(callNative).getMockImplementation()!;
+  let stored = await previous('get_state') as unknown as typeof emptyState;
+  vi.mocked(callNative).mockImplementation(async (command, args) => {
+    if (command === 'get_capabilities') return { platform: 'android', wallpaper: true, screensaver: true, minIntervalSeconds: 900, notes: [] } as never;
+    if (command === 'get_state') return structuredClone(stored) as never;
+    if (command === 'save_state') {
+      stored = structuredClone(args!.state as typeof emptyState);
+      return structuredClone(stored) as never;
+    }
+    return previous(command, args);
+  });
+  const selector = () => host.querySelector<HTMLSelectElement>('select[aria-label="Lock screen source"]')!;
+  await act(async () => root.render(<App />));
+  await click('Settings');
+  expect(selector()?.options[1]?.textContent).toBe('Ảnh nhà tôi');
+  expect(selector().value).toBe('');
+  await act(async () => {
+    selector().value = 'user';
+    selector().dispatchEvent(new Event('change', { bubbles: true }));
+  });
+  await act(async () => root.unmount());
+  root = createRoot(host);
+  await act(async () => root.render(<App />));
+  await click('Settings');
+  expect(selector().value).toBe('user');
+  await click('Change lock screen now');
+  expect(callNative).toHaveBeenCalledWith('next_lock_wallpaper');
+  expect(callNative).not.toHaveBeenCalledWith('next_wallpaper');
+  expect(host.querySelector('.toast[role="status"]')?.textContent).toContain('Lock screen wallpaper updated.');
+});
