@@ -179,6 +179,8 @@ pub struct MediaItem {
     pub name: String,
     pub url: String,
     pub source_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -318,6 +320,16 @@ mod tests {
         assert_eq!(value["settings"]["animatedWallpaper"], false);
         assert_eq!(value["settings"]["lockIntervalSeconds"], 900);
         assert_eq!(value["lockCurrent"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn media_kind_survives_round_trip_and_legacy_items_still_load() {
+        let mut value = json!({"id":"one", "name":"one", "url":"https://dav.test/one", "sourceId":"dav", "kind":"video"});
+        let media: MediaItem = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(serde_json::to_value(media).unwrap()["kind"], "video");
+        value.as_object_mut().unwrap().remove("kind");
+        let media: MediaItem = serde_json::from_value(value).unwrap();
+        assert!(serde_json::to_value(media).unwrap().get("kind").is_none());
     }
 
     #[test]

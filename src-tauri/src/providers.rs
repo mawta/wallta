@@ -53,11 +53,50 @@ pub fn item(url: String, name: Option<String>, source: &str) -> MediaItem {
             .unwrap_or("Image")
             .to_string()
     });
+    let kind = extension_kind(&name)
+        .or_else(|| extension_kind(&url))
+        .map(str::to_owned);
     MediaItem {
         id,
         name,
         url,
         source_id: source.into(),
+        kind,
+    }
+}
+
+fn extension_kind(path: &str) -> Option<&'static str> {
+    let path = path
+        .split(['?', '#'])
+        .next()
+        .unwrap_or(path)
+        .to_ascii_lowercase();
+    if path.ends_with(".gif") {
+        Some("gif")
+    } else if path.ends_with(".mp4") || path.ends_with(".webm") {
+        Some("video")
+    } else if is_image(&path) {
+        Some("image")
+    } else {
+        None
+    }
+}
+
+fn mime_kind(mime: &str) -> Option<&'static str> {
+    let mime = mime
+        .split(';')
+        .next()
+        .unwrap_or(mime)
+        .trim()
+        .to_ascii_lowercase();
+    if mime == "image/gif" {
+        Some("gif")
+    } else if matches!(mime.as_str(), "video/mp4" | "video/webm") {
+        Some("video")
+    } else if mime.starts_with("image/") {
+        Some("image")
+    } else {
+        None
     }
 }
 pub fn is_image(path: &str) -> bool {
@@ -81,6 +120,27 @@ pub fn is_media(path: &str) -> bool {
 #[cfg(test)]
 mod motion_tests {
     use super::*;
+
+    #[test]
+    fn media_kind_uses_supported_filename_extensions() {
+        for (name, kind) in [
+            ("frame.JPG", "image"),
+            ("animation.GIF", "gif"),
+            ("clip.MP4", "video"),
+            ("clip.webm", "video"),
+        ] {
+            assert_eq!(
+                item("https://media.test/one".into(), Some(name.into()), "source")
+                    .kind
+                    .as_deref(),
+                Some(kind)
+            );
+        }
+        assert_eq!(
+            item("https://media.test/one".into(), None, "source").kind,
+            None
+        );
+    }
     #[test]
     fn local_sources_enumerate_only_supported_video_containers() {
         let directory = tempfile::tempdir().unwrap();
@@ -120,6 +180,9 @@ mod motion_tests {
         assert_eq!(listed.len(), 2);
         assert!(listed[0].url.ends_with("/one?alt=media"));
         assert_eq!(listed[1].name, "video.webm");
+        assert!(listed
+            .iter()
+            .all(|item| item.kind.as_deref() == Some("video")));
         assert!(is_media("https://media.test/clip.MP4?token=abc#preview"));
         assert!(!is_media("https://media.test/clip.mp4.exe"));
     }
@@ -128,6 +191,7 @@ mod motion_tests {
         let listed = parse_webdav("<d:multistatus xmlns:d=\"DAV:\"><d:response><d:href>/media/one</d:href><d:getcontenttype>video/mp4</d:getcontenttype></d:response><d:response><d:href>/media/two</d:href><d:getcontenttype>video/x-msvideo</d:getcontenttype></d:response></d:multistatus>", "https://dav.test/media/", "dav").unwrap();
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].url, "https://dav.test/media/one");
+        assert_eq!(listed[0].kind.as_deref(), Some("video"));
     }
 }
 fn is_local_image(path: &Path) -> bool {
@@ -343,7 +407,10 @@ fn parse_webdav_page(
                                     || matches!(mime.as_str(), "video/mp4" | "video/webm"))
                                 && images.len() < MAX_ITEMS
                             {
-                                let media = item(url.into(), None, source);
+                                let mut media = item(url.into(), None, source);
+                                if let Some(kind) = mime_kind(&mime) {
+                                    media.kind = Some(kind.into());
+                                }
                                 if image_ids.insert(media.id.clone()) {
                                     images.push(media);
                                 }
@@ -680,11 +747,15 @@ pub fn walk_drive(
                 } else if (mime.starts_with("image/") || matches!(mime, "video/mp4" | "video/webm"))
                     && file_ids.insert(id.to_string())
                 {
-                    result.push(item(
+                    let mut media = item(
                         format!("https://www.googleapis.com/drive/v3/files/{id}?alt=media"),
                         Some(name.into()),
                         &source.id,
-                    ));
+                    );
+                    if let Some(kind) = mime_kind(mime) {
+                        media.kind = Some(kind.into());
+                    }
+                    result.push(media);
                     if result.len() >= MAX_ITEMS {
                         return Ok(result);
                     }

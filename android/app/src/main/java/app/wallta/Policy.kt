@@ -9,7 +9,13 @@ import java.time.LocalTime
 
 data class Media(val id: String, val name: String, val url: String, val sourceId: String, val photos: Boolean = false, val kind: String = MotionPolicy.hint(name, url)) {
     fun json(public: Boolean = false) = JSONObject().put("id", id).put("name", name).put("url", if (public) "" else url).put("sourceId", sourceId).put("photos", photos).put("kind", kind)
-    companion object { fun from(j: JSONObject) = Media(j.getString("id"), j.getString("name"), j.getString("url"), j.getString("sourceId"), j.optBoolean("photos")) }
+    companion object {
+        fun from(j: JSONObject): Media {
+            val name = j.getString("name"); val url = j.getString("url")
+            val kind = j.optString("kind").takeIf { it in setOf("image", "gif", "video") } ?: MotionPolicy.hint(name, url)
+            return Media(j.getString("id"), name, url, j.getString("sourceId"), j.optBoolean("photos"), kind)
+        }
+    }
 }
 
 object Policy {

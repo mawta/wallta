@@ -124,7 +124,7 @@ class MediaRepository(private val context: Context, private val store: StateStor
             for (f in folder.listFiles()) {
                 if (items.size >= 10000 || entries++ >= 100000 || System.nanoTime() >= deadline || Thread.currentThread().isInterrupted) return
                 if (f.isDirectory && s.optBoolean("recursive")) scan(f, depth + 1)
-                else if (f.isFile && (f.type?.startsWith("image/") == true || f.type?.startsWith("video/") == true || MotionPolicy.hint(f.name.orEmpty(), "") != "image")) items += Media(Policy.hash("${s.getString("id")}:${SourceFolders.documentKey(f.uri.toString())}"), f.name ?: "Image", f.uri.toString(), s.getString("id"))
+                else if (f.isFile && (f.type?.startsWith("image/") == true || f.type?.startsWith("video/") == true || MotionPolicy.hint(f.name.orEmpty(), "") != "image")) items += Media(Policy.hash("${s.getString("id")}:${SourceFolders.documentKey(f.uri.toString())}"), f.name ?: "Image", f.uri.toString(), s.getString("id"), kind = MotionPolicy.mimeHint(f.type, f.name.orEmpty(), f.uri.toString()))
             }
         }
         SourceFolders.locations(s).forEach { location ->
@@ -175,7 +175,7 @@ class MediaRepository(private val context: Context, private val store: StateStor
                     if (SourceFolders.contains(s, resolved.toString())) {
                         val target = resolved.toString()
                         if (folder && s.optBoolean("recursive") && target.trimEnd('/') != url.trimEnd('/')) scan(target, depth + 1)
-                        else if (!folder && (mime.startsWith("image/") || mime.startsWith("video/") || resolved.path.matches(Regex("(?i).*\\.(jpg|jpeg|png|webp|gif|bmp|heic|mp4|webm)$"))) && items.size < 10000) items[target] = Media(Policy.hash("$source:$target"), name.ifBlank { resolved.path.substringAfterLast('/') }, target, source)
+                        else if (!folder && (mime.startsWith("image/") || mime.startsWith("video/") || resolved.path.matches(Regex("(?i).*\\.(jpg|jpeg|png|webp|gif|bmp|heic|mp4|webm)$"))) && items.size < 10000) items[target] = Media(Policy.hash("$source:$target"), name.ifBlank { resolved.path.substringAfterLast('/') }, target, source, kind = MotionPolicy.mimeHint(mime, name, target))
                     }
                 }
                 parser.next()
@@ -207,7 +207,7 @@ class MediaRepository(private val context: Context, private val store: StateStor
                 for (i in 0 until files.length()) {
                     val f = files.getJSONObject(i); val mime = f.optString("mimeType")
                     if (mime == "application/vnd.google-apps.folder" && s.optBoolean("recursive")) scan(f.getString("id"), depth + 1)
-                    else if ((mime.startsWith("image/") || mime == "video/mp4" || mime == "video/webm") && items.size < 10000) { val id = f.getString("id"); val url = if (relay != null) "${relay.getString("relayUrl")}/api/drive/media/${Net.enc(id)}" else "https://www.googleapis.com/drive/v3/files/${Net.enc(id)}?alt=media&key=${Net.enc(key)}"; items[id] = Media(Policy.hash("${s.getString("id")}:$id"), f.getString("name"), url, s.getString("id")) }
+                    else if ((mime.startsWith("image/") || mime == "video/mp4" || mime == "video/webm") && items.size < 10000) { val id = f.getString("id"); val url = if (relay != null) "${relay.getString("relayUrl")}/api/drive/media/${Net.enc(id)}" else "https://www.googleapis.com/drive/v3/files/${Net.enc(id)}?alt=media&key=${Net.enc(key)}"; items[id] = Media(Policy.hash("${s.getString("id")}:$id"), f.getString("name"), url, s.getString("id"), kind = MotionPolicy.mimeHint(mime, f.getString("name"), url)) }
                 }
                 page = data.optString("nextPageToken")
             } while (page.isNotEmpty() && ++pages < 100 && items.size < 10000)

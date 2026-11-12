@@ -183,6 +183,58 @@ pub fn offline_items(source: &Source, catalog: Option<&Catalog>, cache: &Path) -
         })
         .unwrap_or_default()
 }
+
+/// Commit a listing without replacing catalogs published concurrently by another rotation target.
+pub fn merge_catalogs(
+    runtime: &mut RuntimeState,
+    incoming: &HashMap<String, Catalog>,
+    queried_sources: &[Source],
+) {
+    for source in queried_sources.iter().filter(|source| source.enabled) {
+        if let Some(catalog) = incoming
+            .get(&source.id)
+            .filter(|catalog| catalog.fingerprint == source_fingerprint(source))
+        {
+            runtime.catalogs.insert(source.id.clone(), catalog.clone());
+        }
+    }
+}
+
+#[cfg(test)]
+mod catalog_merge_tests {
+    use super::*;
+
+    #[test]
+    fn home_listing_preserves_lock_catalog_published_after_its_snapshot() {
+        let source = |id: &str| {
+            serde_json::from_value::<Source>(
+                serde_json::json!({"id":id,"name":id,"kind":"local","location":id}),
+            )
+            .unwrap()
+        };
+        let home = source("home");
+        let lock = source("lock");
+        let catalog = |source: &Source, label: &str| Catalog {
+            fingerprint: source_fingerprint(source),
+            items: vec![crate::providers::item(
+                format!("{label}.jpg"),
+                Some(label.into()),
+                &source.id,
+            )],
+        };
+        let mut runtime = RuntimeState::default();
+        runtime
+            .catalogs
+            .insert(lock.id.clone(), catalog(&lock, "fresh-lock"));
+        let incoming = HashMap::from([
+            (home.id.clone(), catalog(&home, "home")),
+            (lock.id.clone(), catalog(&lock, "stale-lock")),
+        ]);
+        merge_catalogs(&mut runtime, &incoming, &[home]);
+        assert_eq!(runtime.catalogs["lock"].items[0].name, "fresh-lock");
+        assert_eq!(runtime.catalogs["home"].items[0].name, "home");
+    }
+}
 pub fn reconcile_catalogs(runtime: &mut RuntimeState, sources: &[Source], cache: &Path) {
     // Migrate ownership from older installations before discarding stale catalogs.
     // This index then outlives catalog refreshes, including items no longer listed.
@@ -486,6 +538,7 @@ mod google_identity_tests {
             name: "Old account image".into(),
             url: "https://example.com/image.jpg".into(),
             source_id: old.id.clone(),
+            kind: None,
         };
         let file = cache.path().join(format!("{id}.img"));
         fs::write(&file, b"cached-old-image").unwrap();

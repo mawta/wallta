@@ -623,7 +623,11 @@ impl Engine {
         if self.revision.load(Ordering::SeqCst) != revision {
             return Ok(runtime.media.clone());
         }
-        runtime.persistent.catalogs = persistent.catalogs;
+        storage::merge_catalogs(
+            &mut runtime.persistent,
+            &persistent.catalogs,
+            &snapshot.state.sources,
+        );
         runtime.state.error = (!errors.is_empty()).then(|| errors.join("\n"));
         runtime.media = images.clone();
         self.store.save_runtime(&runtime.persistent)?;
@@ -751,6 +755,15 @@ impl Engine {
             return Err("This file is a still image.".into());
         }
         let path = self.stage_motion(&bytes, source, revision)?;
+        let mut runtime = self.inner.lock().map_err(|error| error.to_string())?;
+        if !self.source_is_current(&runtime, source, revision) {
+            return Err("Media request cancelled because settings changed.".into());
+        }
+        let mut keep = active_motion_files(&runtime);
+        keep.push(path.clone());
+        self.trim_cache_excluding(runtime.state.settings.cache_limit_mb, &keep)?;
+        storage::prune_cache_owners(&mut runtime.persistent, &self.store.cache);
+        self.store.save_runtime(&runtime.persistent)?;
         Ok(path.to_string_lossy().into_owned())
     }
     fn restore_motion(&self) -> Result<(), String> {
@@ -1096,7 +1109,11 @@ impl Engine {
         if self.revision.load(Ordering::SeqCst) != revision {
             return Ok(storage::public_state(&mut runtime.state));
         }
-        runtime.persistent.catalogs = snapshot.persistent.catalogs;
+        storage::merge_catalogs(
+            &mut runtime.persistent,
+            &snapshot.persistent.catalogs,
+            &selection.sources,
+        );
         if !explicit_source {
             runtime.persistent.shuffle = selection_shuffle;
         }
@@ -1209,6 +1226,7 @@ impl Engine {
         let (snapshot, revision) = self.operation_snapshot()?;
         let mut known = snapshot.media.clone();
         known.extend(snapshot.state.current.iter().cloned());
+        known.extend(snapshot.state.lock_current.iter().cloned());
         for source in &snapshot.state.sources {
             if let Some(catalog) = snapshot
                 .persistent
@@ -1252,6 +1270,7 @@ impl Engine {
         let preview = prepared.publish(&self.store.cache)?;
         let mut keep = vec![PathBuf::from(&preview.image.url)];
         keep.extend(preview.before.iter().map(|image| PathBuf::from(&image.url)));
+        keep.extend(active_motion_files(&runtime));
         self.trim_cache_excluding(runtime.state.settings.cache_limit_mb, &keep)?;
         storage::prune_cache_owners(&mut runtime.persistent, &self.store.cache);
         self.store.save_runtime(&runtime.persistent)?;
@@ -1262,8 +1281,22 @@ impl Engine {
         let media = snapshot
             .media
             .iter()
+            .chain(snapshot.state.current.iter())
+            .chain(snapshot.state.lock_current.iter())
+            .chain(
+                snapshot
+                    .persistent
+                    .catalogs
+                    .values()
+                    .filter(|catalog| {
+                        snapshot.state.sources.iter().any(|source| {
+                            source.enabled
+                                && storage::source_fingerprint(source) == catalog.fingerprint
+                        })
+                    })
+                    .flat_map(|catalog| catalog.items.iter()),
+            )
             .find(|m| m.id == id)
-            .or_else(|| snapshot.state.current.as_ref().filter(|m| m.id == id))
             .ok_or("Image is no longer in the library. Refresh the library first.")?;
         let source = snapshot
             .state
@@ -1548,15 +1581,19 @@ fn active_motion_files(runtime: &Runtime) -> Vec<PathBuf> {
 }
 
 fn is_video_item(media: &MediaItem) -> bool {
-    [&media.name, &media.url].iter().any(|value| {
-        value
-            .split(['?', '#'])
-            .next()
-            .and_then(|value| value.rsplit('.').next())
-            .is_some_and(|extension| {
-                extension.eq_ignore_ascii_case("mp4") || extension.eq_ignore_ascii_case("webm")
-            })
-    })
+    media
+        .kind
+        .as_deref()
+        .is_some_and(|kind| kind.eq_ignore_ascii_case("video"))
+        || [&media.name, &media.url].iter().any(|value| {
+            value
+                .split(['?', '#'])
+                .next()
+                .and_then(|value| value.rsplit('.').next())
+                .is_some_and(|extension| {
+                    extension.eq_ignore_ascii_case("mp4") || extension.eq_ignore_ascii_case("webm")
+                })
+        })
 }
 
 pub fn start_worker(app: tauri::AppHandle, engine: Arc<Engine>) {
@@ -2314,6 +2351,95 @@ pub async fn get_photo_preview(
 #[cfg(test)]
 mod photo_preview_tests {
     use super::*;
+
+    #[test]
+    fn playback_preview_trims_old_cache_without_evicting_requested_or_active_media() {
+        let temp = tempfile::tempdir().unwrap();
+        let engine =
+            Engine::new(Store::new(temp.path().join("data"), temp.path().join("cache")).unwrap())
+                .unwrap();
+        let video = temp.path().join("video.mp4");
+        fs::write(&video, b"\0\0\0\x18ftypisom\0\0\0\0").unwrap();
+        let source: Source = serde_json::from_value(serde_json::json!({"id":"source", "name":"Source", "kind":"local", "location":temp.path()})).unwrap();
+        let media = providers::item(video.to_string_lossy().into_owned(), None, &source.id);
+        let active = engine.store.cache.join("motion-active.mp4");
+        let poster = active.with_extension("poster.png");
+        let old = engine.store.cache.join("old.img");
+        for path in [&active, &poster, &old] {
+            fs::write(path, b"cache bytes").unwrap();
+        }
+        {
+            let mut runtime = engine.inner.lock().unwrap();
+            runtime.state.sources.push(source);
+            runtime.media.push(media.clone());
+            runtime.motion_path = Some(active.clone());
+            runtime.state.settings.cache_limit_mb = 0;
+        }
+        let requested = PathBuf::from(engine.playback_preview(&media.id).unwrap());
+        assert!(requested.is_file() && active.is_file() && poster.is_file());
+        assert!(!old.exists());
+    }
+
+    #[test]
+    fn photo_preview_cache_trim_keeps_active_motion_and_poster() {
+        let temp = tempfile::tempdir().unwrap();
+        let engine =
+            Engine::new(Store::new(temp.path().join("data"), temp.path().join("cache")).unwrap())
+                .unwrap();
+        let image = temp.path().join("image.png");
+        image::DynamicImage::new_rgb8(4, 4).save(&image).unwrap();
+        let source: Source = serde_json::from_value(serde_json::json!({"id":"source", "name":"Source", "kind":"local", "location":temp.path()})).unwrap();
+        let media = providers::item(image.to_string_lossy().into_owned(), None, &source.id);
+        let motion = engine.store.cache.join("motion-active.mp4");
+        let poster = motion.with_extension("poster.png");
+        let old = engine.store.cache.join("old.img");
+        for path in [&motion, &poster, &old] {
+            fs::write(path, b"test cache bytes").unwrap();
+        }
+        {
+            let mut runtime = engine.inner.lock().unwrap();
+            runtime.state.sources.push(source);
+            runtime.media.push(media.clone());
+            runtime.motion_path = Some(motion.clone());
+            runtime.state.settings.cache_limit_mb = 0;
+        }
+        engine.photo_preview(&media.id, "source").unwrap();
+        assert!(motion.is_file() && poster.is_file());
+        assert!(!old.exists());
+    }
+
+    #[test]
+    fn lock_preview_resolves_independent_current_and_fresh_catalog() {
+        for current in [true, false] {
+            let temp = tempfile::tempdir().unwrap();
+            let engine = Engine::new(
+                Store::new(temp.path().join("data"), temp.path().join("cache")).unwrap(),
+            )
+            .unwrap();
+            let image = temp.path().join("lock.png");
+            image::DynamicImage::new_rgb8(4, 4).save(&image).unwrap();
+            let source: Source = serde_json::from_value(serde_json::json!({"id":"lock", "name":"Lock", "kind":"local", "location":temp.path()})).unwrap();
+            let media = providers::item(image.to_string_lossy().into_owned(), None, &source.id);
+            {
+                let mut runtime = engine.inner.lock().unwrap();
+                runtime.state.sources.push(source.clone());
+                if current {
+                    runtime.state.lock_current = Some(media.clone());
+                } else {
+                    runtime.persistent.catalogs.insert(
+                        source.id.clone(),
+                        Catalog {
+                            fingerprint: storage::source_fingerprint(&source),
+                            items: vec![media.clone()],
+                        },
+                    );
+                }
+            }
+            assert!(PathBuf::from(engine.preview(&media.id).unwrap()).is_file());
+            engine.inner.lock().unwrap().state.sources[0].enabled = false;
+            assert!(engine.preview(&media.id).is_err());
+        }
+    }
     #[test]
     fn saved_pair_reopens_disabled_and_survives_cache_clear_and_deletes_with_collection() {
         let temp = tempfile::tempdir().unwrap();

@@ -29,7 +29,7 @@ class WalltaDreamService : DreamService() {
         surface = SurfaceView(this)
         root.addView(surface, FrameLayout.LayoutParams(-1, -1))
         val inset = (32 * resources.displayMetrics.density).toInt()
-        message = TextView(this).apply { text = "Wallta · Loading media…"; setTextColor(Color.WHITE); textSize = 24f; setShadowLayer(4f, 0f, 2f, Color.BLACK) }
+        message = TextView(this).apply { text = "Wallta Â· Loading mediaâ€¦"; setTextColor(Color.WHITE); textSize = 24f; setShadowLayer(4f, 0f, 2f, Color.BLACK) }
         clock = TextView(this).apply { setTextColor(Color.WHITE); textSize = 42f; setShadowLayer(5f, 0f, 2f, Color.BLACK); visibility = View.GONE }
         root.addView(message, FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM or Gravity.START).apply { setMargins(inset, inset, inset, inset) })
         root.addView(clock, FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM or Gravity.END).apply { setMargins(inset, inset, inset, inset) })

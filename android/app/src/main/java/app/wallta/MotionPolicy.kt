@@ -3,6 +3,11 @@ package app.wallta
 import org.json.JSONObject
 
 internal object MotionPolicy {
+    fun mimeHint(mime: String?, name: String, url: String): String = when (mime.orEmpty().substringBefore(';').trim().lowercase(java.util.Locale.ROOT)) {
+        "video/mp4", "video/webm" -> "video"
+        "image/gif" -> "gif"
+        else -> hint(name, url)
+    }
     fun fileKind(file: java.io.File): String = file.inputStream().use { stream -> val header = ByteArray(16); val read = stream.read(header); detect(header.copyOf(maxOf(0, read))) }
     fun hint(name: String, url: String): String {
         val path = runCatching { java.net.URI(url).path }.getOrNull().orEmpty()
