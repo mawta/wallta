@@ -19,12 +19,23 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri -> target
+          cache-on-failure: true
       - run: npm ci
       - run: node --test scripts/release.test.mjs
       - run: node scripts/release.mjs privacy
       - run: npm test -- --run
       - run: npm run build
       - run: cargo test --manifest-path src-tauri/Cargo.toml
+      - name: Diagnose native loader failures
+        if: failure()
+        run: python scripts/check-windows-imports.py
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: Wallta-Windows-native-diagnostics
+          path: src-tauri/target/debug/deps/wallta_lib-*.exe
+          if-no-files-found: ignore
+          retention-days: 1
       - run: npm run tauri -- build
       - uses: actions/upload-artifact@v4
         with:
