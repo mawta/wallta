@@ -143,7 +143,7 @@ pub fn apply_prepared(path: &Path, directory: &Path) -> Result<(), String> {
 pub fn apply_lock_prepared(path: &Path, directory: &Path) -> Result<(), String> {
     #[cfg(windows)]
     {
-        #[link(name = "combase")]
+        #[link(name = "runtimeobject")]
         extern "system" {
             fn RoInitialize(kind: u32) -> i32;
             fn RoUninitialize();

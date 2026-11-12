@@ -148,7 +148,7 @@ fn video_poster(path: &std::path::Path) -> Result<Vec<u8>, String> {
     };
     // Rotation runs on native worker threads. WinRT requires an apartment on
     // each caller, even when WebView2 has initialized COM on the UI thread.
-    #[link(name = "combase")]
+    #[link(name = "runtimeobject")]
     extern "system" {
         fn RoInitialize(kind: u32) -> i32;
         fn RoUninitialize();
