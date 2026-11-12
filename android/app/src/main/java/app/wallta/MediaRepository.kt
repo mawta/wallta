@@ -124,7 +124,7 @@ class MediaRepository(private val context: Context, private val store: StateStor
             for (f in folder.listFiles()) {
                 if (items.size >= 10000 || entries++ >= 100000 || System.nanoTime() >= deadline || Thread.currentThread().isInterrupted) return
                 if (f.isDirectory && s.optBoolean("recursive")) scan(f, depth + 1)
-                else if (f.isFile && f.type?.startsWith("image/") == true) items += Media(Policy.hash("${s.getString("id")}:${SourceFolders.documentKey(f.uri.toString())}"), f.name ?: "Image", f.uri.toString(), s.getString("id"))
+                else if (f.isFile && (f.type?.startsWith("image/") == true || f.type?.startsWith("video/") == true || MotionPolicy.hint(f.name.orEmpty(), "") != "image")) items += Media(Policy.hash("${s.getString("id")}:${SourceFolders.documentKey(f.uri.toString())}"), f.name ?: "Image", f.uri.toString(), s.getString("id"))
             }
         }
         SourceFolders.locations(s).forEach { location ->
@@ -175,7 +175,7 @@ class MediaRepository(private val context: Context, private val store: StateStor
                     if (SourceFolders.contains(s, resolved.toString())) {
                         val target = resolved.toString()
                         if (folder && s.optBoolean("recursive") && target.trimEnd('/') != url.trimEnd('/')) scan(target, depth + 1)
-                        else if (!folder && (mime.startsWith("image/") || resolved.path.matches(Regex("(?i).*\\.(jpg|jpeg|png|webp|gif|bmp|heic)$"))) && items.size < 10000) items[target] = Media(Policy.hash("$source:$target"), name.ifBlank { resolved.path.substringAfterLast('/') }, target, source)
+                        else if (!folder && (mime.startsWith("image/") || mime.startsWith("video/") || resolved.path.matches(Regex("(?i).*\\.(jpg|jpeg|png|webp|gif|bmp|heic|mp4|webm)$"))) && items.size < 10000) items[target] = Media(Policy.hash("$source:$target"), name.ifBlank { resolved.path.substringAfterLast('/') }, target, source)
                     }
                 }
                 parser.next()
@@ -207,7 +207,7 @@ class MediaRepository(private val context: Context, private val store: StateStor
                 for (i in 0 until files.length()) {
                     val f = files.getJSONObject(i); val mime = f.optString("mimeType")
                     if (mime == "application/vnd.google-apps.folder" && s.optBoolean("recursive")) scan(f.getString("id"), depth + 1)
-                    else if (mime.startsWith("image/") && items.size < 10000) { val id = f.getString("id"); val url = if (relay != null) "${relay.getString("relayUrl")}/api/drive/media/${Net.enc(id)}" else "https://www.googleapis.com/drive/v3/files/${Net.enc(id)}?alt=media&key=${Net.enc(key)}"; items[id] = Media(Policy.hash("${s.getString("id")}:$id"), f.getString("name"), url, s.getString("id")) }
+                    else if ((mime.startsWith("image/") || mime == "video/mp4" || mime == "video/webm") && items.size < 10000) { val id = f.getString("id"); val url = if (relay != null) "${relay.getString("relayUrl")}/api/drive/media/${Net.enc(id)}" else "https://www.googleapis.com/drive/v3/files/${Net.enc(id)}?alt=media&key=${Net.enc(key)}"; items[id] = Media(Policy.hash("${s.getString("id")}:$id"), f.getString("name"), url, s.getString("id")) }
                 }
                 page = data.optString("nextPageToken")
             } while (page.isNotEmpty() && ++pages < 100 && items.size < 10000)
@@ -222,7 +222,7 @@ class MediaRepository(private val context: Context, private val store: StateStor
         fun resolve(mediaId: String, source: String): Media = list(force = true, sourceIds = setOf(source), strict = true, includeDisabled = true)
             .find { it.id == mediaId && it.sourceId == source } ?: error("Image no longer available")
         // Trim once the pair is complete; resolving the original must not evict its output.
-        fun prepare(media: Media) = PhotoPreviewCache.prepare(context, store, media, image(media, includeDisabled = true, trimCache = false), snapshot)
+        fun prepare(media: Media) = PhotoPreviewCache.prepare(context, store, media, poster(media, includeDisabled = true, trimCache = false), snapshot)
         val media = resolve(id, sourceId)
         val result = prepare(media)
         var beforeId: String? = null
@@ -252,7 +252,21 @@ class MediaRepository(private val context: Context, private val store: StateStor
     }
     fun visual(media: Media): File {
         val snapshot = synchronized(StateStore.lock) { store.revision() to (store.get("cacheEpoch")?.optLong("value") ?: 0L) }
-        return VisualCache.prepare(context, store, media, image(media), snapshot)
+        val original = image(media)
+        return if (MotionPolicy.fileKind(original) == "video") MotionPoster.prepare(context, store, media, original, snapshot) else VisualCache.prepare(context, store, media, original, snapshot)
+    }
+    fun playbackPreview(id: String): String {
+        require(id.matches(Regex("[a-f0-9]{64}"))) { "Invalid media selection" }
+        val media = list().find { it.id == id } ?: error("Media no longer available")
+        val original = image(media)
+        val kind = MotionPolicy.fileKind(original)
+        require(kind in listOf("gif", "video")) { "This media is a still image" }
+        if (kind == "gif") {
+            val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }; android.graphics.BitmapFactory.decodeFile(original.path, bounds)
+            require(bounds.outWidth in 1..4096 && bounds.outHeight in 1..4096 && bounds.outWidth.toLong() * bounds.outHeight <= 8_388_608) { "GIF preview exceeds 8 MP playback limit" }
+        }
+        val extension = if (kind == "gif") "gif" else original.inputStream().use { stream -> val header = ByteArray(12); stream.read(header); if (String(header, 4, 4, Charsets.US_ASCII) == "ftyp") "mp4" else "webm" }
+        return "${TrustedWebView.origin}/playback/$id.$extension"
     }
     fun image(media: Media, includeDisabled: Boolean = false, trimCache: Boolean = true): File {
         val target = cacheFile(media.id)
@@ -267,38 +281,60 @@ class MediaRepository(private val context: Context, private val store: StateStor
             if (System.currentTimeMillis() - cachedAt > 60 * 60 * 1000) target.delete()
         }
         if (target.exists()) { target.setLastModified(System.currentTimeMillis()); return target }
-        val bytes = if (media.url.startsWith("wallta-upscale://")) {
-            UpscaleCollections(context, store).image(media.url).inputStream().use { Net.bounded(it, 64 * 1024 * 1024) }
-        } else if (media.url.startsWith("wallta-import://")) {
-            val slash = media.url.lastIndexOf('/'); val location = media.url.substring(0, slash); val name = media.url.substring(slash + 1)
-            require(name.matches(Regex("[a-f0-9]{64}\\.img")))
-            File(PhotoImporter.directory(context, location), name).inputStream().use { Net.bounded(it, 25 * 1024 * 1024) }
-        } else if (media.url.startsWith("content://")) context.contentResolver.openInputStream(Uri.parse(media.url))!!.use { Net.bounded(it, 25 * 1024 * 1024) }
-        else {
-            require(networkAllowed(state.getJSONObject("settings"))) { "Network unavailable or Wi-Fi required" }
-            val source = (0 until sources.length()).map { sources.getJSONObject(it) }.first { it.optString("id") == media.sourceId }
-            val scope: ((String) -> Boolean)? = if (source.optString("kind") == "webdav") ({ url -> SourceFolders.contains(source, url) }) else null
-            Net.bytes(media.url, 25 * 1024 * 1024, headers(media), allowedUrl = scope)
-        }
-        val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
-        require(bounds.outWidth > 0 && bounds.outHeight > 0 && bounds.outWidth.toLong() * bounds.outHeight <= 120_000_000) { "Invalid or oversized image" }
-        synchronized(StateStore.lock) {
-            check(!Thread.currentThread().isInterrupted && store.revision() == revision && (store.get("cacheEpoch")?.optLong("value") ?: 0L) == cacheEpoch) { "Image operation cancelled by newer state or cache clear" }
-            UpscaleFiles.root(dir, create = true)
-            val temp = File.createTempFile("image-", ".tmp", dir)
-            try { temp.writeBytes(bytes); require(temp.renameTo(target)) { "Cannot cache image" } } finally { temp.delete() }
-            VisualCache.file(context, media.id).delete(); PhotoPreviewCache.remove(context, media.id)
-            val ledger = store.get("cacheOwners") ?: JSONObject(); ledger.put(media.id, JSONObject().put("source", media.sourceId).put("photos", media.photos).put("createdAt", System.currentTimeMillis())); store.put("cacheOwners", ledger)
-        }
+        UpscaleFiles.root(dir, create = true)
+        val temporary = File.createTempFile("media-", ".tmp", dir)
+        try {
+            if (media.url.startsWith("wallta-upscale://")) {
+                UpscaleCollections(context, store).image(media.url).inputStream().use { input -> temporary.outputStream().use { copyBounded(input, it, 64L * 1024 * 1024) } }
+            } else if (media.url.startsWith("wallta-import://")) {
+                val slash = media.url.lastIndexOf('/'); val name = media.url.substring(slash + 1)
+                require(name.matches(Regex("[a-f0-9]{64}\\.img")))
+                File(PhotoImporter.directory(context, media.url.substring(0, slash)), name).inputStream().use { input -> temporary.outputStream().use { copyBounded(input, it, 25L * 1024 * 1024) } }
+            } else if (media.url.startsWith("content://")) {
+                context.contentResolver.openInputStream(Uri.parse(media.url))!!.use { input -> temporary.outputStream().use { copyBounded(input, it, 128L * 1024 * 1024) } }
+            } else {
+                require(networkAllowed(state.getJSONObject("settings"))) { "Network unavailable or Wi-Fi required" }
+                val source = (0 until sources.length()).map { sources.getJSONObject(it) }.first { it.optString("id") == media.sourceId }
+                val scope: ((String) -> Boolean)? = if (source.optString("kind") == "webdav") ({ url -> SourceFolders.contains(source, url) }) else null
+                Net.bytes(media.url, 128 * 1024 * 1024, headers(media), allowedUrl = scope, downloadTo = temporary)
+            }
+            val kind = MotionPolicy.fileKind(temporary)
+            if (kind == "video") MotionPoster.validate(temporary)
+            else {
+                val limit = if (media.url.startsWith("wallta-upscale://")) 64L * 1024 * 1024 else 25L * 1024 * 1024
+                require(temporary.length() <= limit) { "Image exceeds size limit" }
+                val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                android.graphics.BitmapFactory.decodeFile(temporary.path, bounds)
+                require(bounds.outWidth > 0 && bounds.outHeight > 0 && bounds.outWidth.toLong() * bounds.outHeight <= 120_000_000) { "Invalid or oversized image" }
+            }
+            synchronized(StateStore.lock) {
+                check(!Thread.currentThread().isInterrupted && store.revision() == revision && (store.get("cacheEpoch")?.optLong("value") ?: 0L) == cacheEpoch) { "Image operation cancelled by newer state or cache clear" }
+                require(temporary.renameTo(target)) { "Cannot cache media" }
+                VisualCache.file(context, media.id).delete(); PhotoPreviewCache.remove(context, media.id)
+                val ledger = store.get("cacheOwners") ?: JSONObject(); ledger.put(media.id, JSONObject().put("source", media.sourceId).put("photos", media.photos).put("createdAt", System.currentTimeMillis())); store.put("cacheOwners", ledger)
+            }
+        } finally { temporary.delete() }
         if (trimCache) trim(state.getJSONObject("settings").optInt("cacheLimitMb", 256).toLong() * 1024 * 1024, media.id)
         return target
+    }
+    private fun copyBounded(input: java.io.InputStream, output: java.io.OutputStream, limit: Long) {
+        val buffer = ByteArray(32768); var total = 0L
+        while (true) {
+            check(!Thread.currentThread().isInterrupted) { "Read operation cancelled" }
+            val count = input.read(buffer); if (count < 0) break
+            total += count; require(total <= limit) { "Media exceeds size limit" }; output.write(buffer, 0, count)
+        }
+    }
+    fun poster(media: Media, includeDisabled: Boolean = false, trimCache: Boolean = true): File {
+        val snapshot = synchronized(StateStore.lock) { store.revision() to (store.get("cacheEpoch")?.optLong("value") ?: 0L) }
+        val original = image(media, includeDisabled = includeDisabled, trimCache = trimCache)
+        return if (MotionPolicy.fileKind(original) == "video") MotionPoster.prepare(context, store, media, original, snapshot) else original
     }
     private fun cacheBytes(id: String) = cacheFile(id).length() + VisualCache.file(context, id).length() + PhotoPreviewCache.length(context, id)
     fun trim(limit: Long, keep: String = "", alsoKeep: Set<String> = emptySet()) = synchronized(StateStore.lock) {
         val files = dir.listFiles()?.filter { it.extension == "img" }?.sortedBy { it.lastModified() } ?: emptyList()
         var bytes = files.sumOf { cacheBytes(it.nameWithoutExtension) }; val ledger = store.get("cacheOwners") ?: JSONObject()
-        for (f in files) if (bytes > limit && f.nameWithoutExtension != keep && f.nameWithoutExtension !in alsoKeep) { val visual = VisualCache.file(context, f.nameWithoutExtension); bytes -= cacheBytes(f.nameWithoutExtension); f.delete(); visual.delete(); PhotoPreviewCache.remove(context, f.nameWithoutExtension); ledger.remove(f.nameWithoutExtension) }
+        for (f in files) if (bytes > limit && f.nameWithoutExtension != keep && f.nameWithoutExtension !in alsoKeep && !ActiveMediaPins.contains(f.nameWithoutExtension)) { val visual = VisualCache.file(context, f.nameWithoutExtension); bytes -= cacheBytes(f.nameWithoutExtension); f.delete(); visual.delete(); PhotoPreviewCache.remove(context, f.nameWithoutExtension); ledger.remove(f.nameWithoutExtension) }
         store.put("cacheOwners", ledger)
     }
     fun clearSource(source: String) = synchronized(StateStore.lock) {
@@ -307,7 +343,13 @@ class MediaRepository(private val context: Context, private val store: StateStor
         ledger.keys().asSequence().toList().filter { ledger.getJSONObject(it).optString("source") == source }.forEach { cacheFile(it).delete(); VisualCache.file(context, it).delete(); PhotoPreviewCache.remove(context, it); ledger.remove(it) }
         store.put("cacheOwners", ledger); store.put("catalog:$source", null)
     }
-    fun clear() = synchronized(StateStore.lock) { store.invalidateCache(); dir.listFiles()?.forEach { it.delete() }; File(context.cacheDir, "visual").listFiles()?.forEach { it.delete() }; File(context.cacheDir, "photo-preview").listFiles()?.forEach { it.delete() }; store.put("cacheOwners", null) }
+    fun clear() = synchronized(StateStore.lock) {
+        store.invalidateCache()
+        listOf(dir, File(context.cacheDir, "visual"), File(context.cacheDir, "photo-preview")).forEach { directory -> directory.listFiles()?.filterNot { ActiveMediaPins.contains(it.nameWithoutExtension) }?.forEach { it.delete() } }
+        val ledger = store.get("cacheOwners") ?: JSONObject()
+        ledger.keys().asSequence().toList().filterNot { ActiveMediaPins.contains(it) }.forEach { ledger.remove(it) }
+        store.put("cacheOwners", ledger)
+    }
     fun releaseUnusedGrants() {
         val a = store.state().getJSONArray("sources")
         val used = (0 until a.length()).map { a.getJSONObject(it) }.filter { it.optString("kind") == "local" }.flatMap { SourceFolders.locations(it) }.toSet()

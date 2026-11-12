@@ -7,8 +7,8 @@ import java.security.MessageDigest
 import java.time.LocalDateTime
 import java.time.LocalTime
 
-data class Media(val id: String, val name: String, val url: String, val sourceId: String, val photos: Boolean = false) {
-    fun json(public: Boolean = false) = JSONObject().put("id", id).put("name", name).put("url", if (public) "" else url).put("sourceId", sourceId).put("photos", photos)
+data class Media(val id: String, val name: String, val url: String, val sourceId: String, val photos: Boolean = false, val kind: String = MotionPolicy.hint(name, url)) {
+    fun json(public: Boolean = false) = JSONObject().put("id", id).put("name", name).put("url", if (public) "" else url).put("sourceId", sourceId).put("photos", photos).put("kind", kind)
     companion object { fun from(j: JSONObject) = Media(j.getString("id"), j.getString("name"), j.getString("url"), j.getString("sourceId"), j.optBoolean("photos")) }
 }
 

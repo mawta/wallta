@@ -25,7 +25,7 @@ object Net {
         while (true) { check(!Thread.currentThread().isInterrupted) { "Read operation cancelled" }; val n = input.read(buffer); if (n < 0) break; total += n; require(total <= limit) { "Response exceeds size limit" }; out.write(buffer, 0, n) }
         return out.toByteArray()
     }
-    fun bytes(url: String, limit: Int, headers: Map<String, String> = emptyMap(), method: String = "GET", body: String? = null, type: String = "application/json", tag: String? = null, allowedUrl: ((String) -> Boolean)? = null): ByteArray {
+    fun bytes(url: String, limit: Int, headers: Map<String, String> = emptyMap(), method: String = "GET", body: String? = null, type: String = "application/json", tag: String? = null, allowedUrl: ((String) -> Boolean)? = null, downloadTo: java.io.File? = null): ByteArray {
         require(Policy.http(url)) { "Only HTTP(S) sources are supported" }
         var target = url; var auth = headers
         repeat(6) {
@@ -45,6 +45,18 @@ object Net {
                         // oversized-image error. Keep the HTTP status even if the body is invalid.
                         val payload = runCatching { JSONObject(String(bounded(response.body?.byteStream() ?: error("Empty response"), minOf(limit, 65536)))) }.getOrDefault(JSONObject())
                         throw ApiError(response.code, payload)
+                    }
+                    if (downloadTo != null) {
+                        response.body?.byteStream()?.use { input -> downloadTo.outputStream().use { output ->
+                            val buffer = ByteArray(32768); var total = 0L
+                            while (true) {
+                                check(!Thread.currentThread().isInterrupted) { "Download cancelled" }
+                                val count = input.read(buffer); if (count < 0) break
+                                total += count; require(total <= limit) { "Response exceeds size limit" }
+                                output.write(buffer, 0, count)
+                            }
+                        } } ?: error("Empty response")
+                        return ByteArray(0)
                     }
                     val bytes = bounded(response.body?.byteStream() ?: error("Empty response"), limit)
                     return bytes

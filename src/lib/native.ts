@@ -37,8 +37,8 @@ function getPreview(): AppState {
 }
 export function registerPreviewFiles(id: string, files: FileList | File[]): number {
   for (const item of localMedia.get(id) || []) URL.revokeObjectURL(item.url);
-  const images = Array.from(files).filter(file => /\.(jpe?g|png|webp)$/i.test(file.name));
-  localMedia.set(id, images.map((file, index) => ({ id: `${id}:${index}`, name: file.name, url: URL.createObjectURL(file), sourceId: id })));
+  const images = Array.from(files).filter(file => /\.(jpe?g|png|webp|gif|bmp|mp4|webm)$/i.test(file.name));
+  localMedia.set(id, images.map((file, index) => ({ id: `${id}:${index}`, name: file.name, url: URL.createObjectURL(file), sourceId: id, kind: /\.(mp4|webm)$/i.test(file.name) ? "video" as const : /\.gif$/i.test(file.name) ? "gif" as const : "image" as const })));
   return images.length;
 }
 async function previewMedia(source: Source): Promise<MediaItem[]> {
@@ -92,7 +92,8 @@ async function browserCall(command: string, args: Record<string, unknown>): Prom
     }
     case 'next_wallpaper': {
       const allMedia = await browserCall('list_media', {}) as MediaItem[];
-      const media = typeof args.sourceId === 'string' ? allMedia.filter(item => item.sourceId === args.sourceId) : allMedia;
+      const sourceId = typeof args.sourceId === 'string' ? args.sourceId : state.settings.homeSourceId;
+      const media = sourceId ? allMedia.filter(item => item.sourceId === sourceId) : allMedia;
       const next = state.settings.order === 'shuffle' ? previewCycle.next(media, state.current?.id || null) : selectNext(media, state.current?.id || null, 'sequential');
       if (!next) throw new Error(state.error || t("Chưa có ảnh khả dụng. Thêm hoặc bật nguồn ảnh trước."));
       state.current = next;

@@ -50,6 +50,7 @@ export function clampSettings(settings: Settings, minimum = 1): Settings {
   return {
     ...defaultSettings, ...settings,
     intervalSeconds: finite(settings.intervalSeconds, Math.max(900, minimum), minimum, 604800),
+    lockIntervalSeconds: finite(settings.lockIntervalSeconds, Math.max(900, minimum), minimum, 604800),
     slideshowSeconds: finite(settings.slideshowSeconds, 30, 5, 3600),
     cacheLimitMb: finite(settings.cacheLimitMb, 256, 32, 4096),
     days: [...new Set((Array.isArray(settings.days) ? settings.days : defaultSettings.days).filter(day => Number.isInteger(day) && day >= 0 && day <= 6))],

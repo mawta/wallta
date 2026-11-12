@@ -64,6 +64,12 @@ export function useWallta() {
     if (changed.error) { notify(changed.error, true); return; }
     notify(isAndroid() ? t("Đã đổi hình nền Android.") : isNative() ? t("Đã cập nhật hình nền.") : t("Đã đổi ảnh trong bản xem trước."));
   }), [perform, notify]);
+  const nextLock = useCallback(() => perform(async () => {
+    const changed = normalize(await callNative<AppState>('next_lock_wallpaper'));
+    setState(changed);
+    if (changed.lockError) { notify(changed.lockError, true); return; }
+    notify(t('Đã đổi hình nền màn hình khóa.'));
+  }), [perform, notify]);
   const toggle = () => perform(async () => {
     if (!state.running && !media.length) throw new Error(t("Thêm ít nhất một nguồn có ảnh trước khi bật tự động."));
     setState(normalize(await callNative<AppState>('set_running', { running: !state.running })));
@@ -83,5 +89,5 @@ export function useWallta() {
     }, 5000);
     return () => clearInterval(timer);
   }, [loaded]);
-  return { state, capabilities, media, busy, loaded, notice, notify, save, saveSource, next, toggle, refresh: () => perform(refresh), perform };
+  return { state, capabilities, media, busy, loaded, notice, notify, save, saveSource, next, nextLock, toggle, refresh: () => perform(refresh), perform };
 }

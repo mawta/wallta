@@ -1,8 +1,10 @@
+mod animated_wallpaper;
 mod commands;
 pub mod google;
 mod google_drive;
 mod lan_commands;
 pub mod models;
+mod motion_media;
 mod photo_preview;
 pub mod providers;
 pub mod rotation;
@@ -36,6 +38,7 @@ pub fn run() {
             }
         }))
         .setup(|app| {
+            animated_wallpaper::initialize(app.handle().clone()).map_err(std::io::Error::other)?;
             let store = storage::Store::new(
                 app.path().app_data_dir()?,
                 app.path().app_cache_dir()?.join("media"),
@@ -68,6 +71,7 @@ pub fn run() {
                         }
                     }
                     "quit" => {
+                        animated_wallpaper::stop();
                         let _ = app.state::<Arc<upscale::UpscaleManager>>().cancel(None);
                         app.state::<Arc<lan::LanManager>>().stop();
                         app.exit(0);
@@ -109,10 +113,12 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            if let WindowEvent::CloseRequested { api, .. } = event {
-                api.prevent_close();
-                window.state::<Arc<lan::LanManager>>().stop();
-                let _ = window.hide();
+            if window.label() == "main" {
+                if let WindowEvent::CloseRequested { api, .. } = event {
+                    api.prevent_close();
+                    window.state::<Arc<lan::LanManager>>().stop();
+                    let _ = window.hide();
+                }
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -121,8 +127,10 @@ pub fn run() {
             commands::pick_folder,
             commands::list_media,
             commands::get_preview,
+            commands::get_playback_preview,
             commands::get_photo_preview,
             commands::next_wallpaper,
+            commands::next_lock_wallpaper,
             commands::set_running,
             commands::get_capabilities,
             commands::clear_cache,
@@ -160,6 +168,7 @@ pub fn run() {
                 event,
                 tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. }
             ) {
+                animated_wallpaper::stop();
                 let _ = app.state::<Arc<upscale::UpscaleManager>>().cancel(None);
                 app.state::<Arc<lan::LanManager>>().stop();
             }

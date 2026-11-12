@@ -3,6 +3,8 @@ import { ChevronLeft, ChevronRight, X } from 'lucide-react';
 import { t, useLocale } from '../lib/i18n';
 import { callNative, errorMessage, imageUrl, isNative } from '../lib/native';
 import type { MediaItem } from '../lib/types';
+import { mediaKind } from '../lib/media';
+import { MotionPreview } from './MotionPreview';
 import { ImageComparison } from './ImageComparison';
 
 export interface PhotoPreviewData {
@@ -18,6 +20,7 @@ export function PhotoPreview({ items, initialId, onClose }: { items: MediaItem[]
   const [loaded, setLoaded] = useState<{ key: string; data: PhotoPreviewData }>();
   const [failure, setFailure] = useState<{ key: string; text: string }>();
   const item = items[index];
+  const motion = mediaKind(item) !== 'image';
   const key = item ? `${item.sourceId}:${item.id}` : '';
   const data = loaded?.key === key ? loaded.data : undefined;
   const error = failure?.key === key ? failure.text : '';
@@ -29,14 +32,14 @@ export function PhotoPreview({ items, initialId, onClose }: { items: MediaItem[]
   useEffect(() => {
     let disposed = false;
     setActualSize(false); setLoaded(undefined); setFailure(undefined);
-    if (!item) return;
+    if (!item || motion) return;
     const result = isNative() ? callNative<PhotoPreviewData>('get_photo_preview', { id: item.id, sourceId: item.sourceId }) : Promise.resolve({ url: item.url, width: 0, height: 0 });
     void result.then(value => {
       if (!value?.url || !Number.isFinite(value.width) || !Number.isFinite(value.height)) throw new Error(t('Không thể tải ảnh.'));
       if (!disposed) setLoaded({ key, data: value });
     }).catch(reason => { if (!disposed) setFailure({ key, text: errorMessage(reason) }); });
     return () => { disposed = true; };
-  }, [key]);
+  }, [key, motion]);
   const move = (offset: number) => setIndex(previous => (previous + offset + items.length) % items.length);
   const handleKey = (event: KeyboardEvent<HTMLDialogElement>) => {
     if (event.defaultPrevented) return;
@@ -70,11 +73,11 @@ export function PhotoPreview({ items, initialId, onClose }: { items: MediaItem[]
   };
   return <dialog ref={dialog} className="photo-preview-dialog" aria-label={t('Xem trước ảnh')} onCancel={event => { event.preventDefault(); onClose(); }} onKeyDown={handleKey}>
     <header className="photo-preview-heading"><div><strong>{item?.name}</strong>{data && data.width > 0 && <small>{data.width} × {data.height}</small>}</div><div className="photo-preview-actions">
-      <button data-preview-control="zoom" className="button secondary" disabled={!data} aria-pressed={actualSize} onClick={() => setActualSize(value => !value)}>{actualSize ? t('Vừa cửa sổ') : '100%'}</button>
+      {!motion && <button data-preview-control="zoom" className="button secondary" disabled={!data} aria-pressed={actualSize} onClick={() => setActualSize(value => !value)}>{actualSize ? t('Vừa cửa sổ') : '100%'}</button>}
       <button data-preview-control="close" autoFocus className="icon-button" aria-label={t('Đóng')} onClick={onClose}><X size={21} /></button>
     </div></header>
     <div className="photo-preview-body">
-      {error ? <p className="preview-message" role="alert">{t(error)}</p> : data ? <ImageComparison key={key} afterUrl={imageUrl(data.url)} beforeUrl={data.before ? imageUrl(data.before.url) : undefined} width={data.width || 640} height={data.height || 400} name={item?.name} actualSize={actualSize} onDimensions={(width, height) => {
+      {motion && item ? <MotionPreview key={key} item={item} className="photo-motion-preview" controls /> : error ? <p className="preview-message" role="alert">{t(error)}</p> : data ? <ImageComparison key={key} afterUrl={imageUrl(data.url)} beforeUrl={data.before ? imageUrl(data.before.url) : undefined} width={data.width || 640} height={data.height || 400} name={item?.name} actualSize={actualSize} onDimensions={(width, height) => {
         if (!data.width && width && height) setLoaded({ key, data: { ...data, width, height } });
       }} /> : <p className="preview-message" role="status">{t('Đang tải ảnh…')}</p>}
     </div>

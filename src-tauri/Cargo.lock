@@ -4908,7 +4908,7 @@ dependencies = [
 
 [[package]]
 name = "wallta"
-version = "0.1.15"
+version = "0.1.16"
 dependencies = [
  "chrono",
  "if-addrs",
@@ -4929,6 +4929,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "url",
+ "windows",
  "windows-sys 0.61.2",
  "winreg 0.55.0",
  "zip 2.6.1",

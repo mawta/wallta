@@ -29,6 +29,18 @@ class StateStore(private val context: Context) {
                 source.optString("id") == id && source.optBoolean("enabled", true)
             } }
         }
+        fun normalizeSettings(state: JSONObject) {
+            val settings = state.getJSONObject("settings")
+            val lockSource = lockSourceId(state).orEmpty()
+            settings.put("lockSourceId", lockSource)
+            settings.put("lockRunning", lockSource.isNotEmpty() && settings.optBoolean("lockRunning", state.optBoolean("running")))
+            settings.put("lockIntervalSeconds", settings.optLong("lockIntervalSeconds", 900).coerceIn(900, 604800))
+            settings.put("animatedWallpaper", settings.optBoolean("animatedWallpaper", false))
+            val home = settings.optString("homeSourceId")
+            val sources = state.getJSONArray("sources")
+            settings.put("homeSourceId", home.takeIf { id -> (0 until sources.length()).any { sources.getJSONObject(it).let { s -> s.optString("id") == id && s.optBoolean("enabled", true) } } }.orEmpty())
+            if (lockSource.isEmpty()) for (key in listOf("lockCurrent", "lockLastChanged", "lockError")) state.put(key, JSONObject.NULL)
+        }
     }
     private val file = AtomicFile(File(context.filesDir, "state.enc"))
     private fun key(): SecretKey {
@@ -52,10 +64,12 @@ class StateStore(private val context: Context) {
     }
     fun state(public: Boolean = false): JSONObject = synchronized(lock) {
         val state = read().optJSONObject("state") ?: defaults()
+        normalizeSettings(state)
         if (public) {
             val sources = state.getJSONArray("sources")
             for (i in 0 until sources.length()) secretKeys.forEach { sources.getJSONObject(i).remove(it) }
             state.optJSONObject("current")?.put("url", "")
+            state.optJSONObject("lockCurrent")?.put("url", "")
         }
         state
     }
@@ -92,10 +106,17 @@ class StateStore(private val context: Context) {
         settings.put("intervalSeconds", settings.optLong("intervalSeconds", 900).coerceIn(900, 604800))
         settings.put("slideshowSeconds", settings.optInt("slideshowSeconds", 30).coerceIn(5, 86400))
         settings.put("cacheLimitMb", settings.optInt("cacheLimitMb", 256).coerceIn(16, 2048))
-        settings.put("lockSourceId", lockSourceId(incoming).orEmpty())
+        normalizeSettings(incoming)
         // UI state cannot forge native wallpaper success.
         incoming.put("current", root.optJSONObject("state")?.opt("current") ?: JSONObject.NULL)
         incoming.put("lastChanged", root.optJSONObject("state")?.opt("lastChanged") ?: JSONObject.NULL)
+        val selectedLock = lockSourceId(incoming)
+        val previousState = root.optJSONObject("state")
+        val previousLock = previousState?.let { lockSourceId(it) }
+        val oldLockSource = (0 until old.length()).map { old.getJSONObject(it) }.find { it.optString("id") == previousLock }
+        val newLockSource = (0 until sources.length()).map { sources.getJSONObject(it) }.find { it.optString("id") == selectedLock }
+        val sameLock = selectedLock != null && selectedLock == previousLock && oldLockSource != null && newLockSource != null && MediaSafety.sourceConfig(oldLockSource) == MediaSafety.sourceConfig(newLockSource)
+        for (key in listOf("lockCurrent", "lockLastChanged", "lockError")) incoming.put(key, if (sameLock) previousState?.opt(key) ?: JSONObject.NULL else JSONObject.NULL)
         root.put("state", incoming).put("revision", root.optLong("revision") + 1)
         for (i in 0 until sources.length()) {
             val source = sources.getJSONObject(i); val id = source.getString("id")
@@ -157,7 +178,7 @@ class StateStore(private val context: Context) {
         removed.forEach { id -> invalidateOwnedCache(root, id); root.remove("import:$id"); root.remove("importPending:$id") }
         if (state.optJSONObject("current")?.optString("sourceId") in removed) state.put("current", JSONObject.NULL).put("running", false)
         state.put("sources", kept)
-        state.getJSONObject("settings").put("lockSourceId", lockSourceId(state).orEmpty())
+        normalizeSettings(state)
         root.put("state", state).put("revision", root.optLong("revision") + 1)
         write(root)
     }

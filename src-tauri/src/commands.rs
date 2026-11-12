@@ -8,7 +8,6 @@ use chrono::{Datelike, Timelike};
 use std::{
     collections::HashSet,
     fs,
-    io::Read,
     path::PathBuf,
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -24,13 +23,16 @@ pub struct Engine {
     pub client: reqwest::blocking::Client,
     pub revision: AtomicU64,
     rotation: Mutex<()>,
+    lock_rotation: Mutex<()>,
     mutation_gate: crate::update_policy::MutationGate,
 }
 #[derive(Clone)]
 pub struct Runtime {
     pub state: AppState,
     pub next_due: Instant,
+    pub lock_next_due: Instant,
     pub wallpaper_path: Option<PathBuf>,
+    pub motion_path: Option<PathBuf>,
     pub media: Vec<MediaItem>,
     pub persistent: RuntimeState,
     cache_epoch: u64,
@@ -42,6 +44,7 @@ impl Engine {
     ) -> Result<crate::update_policy::InstallBarrier<'_>, String> {
         let _runtime = self.inner.lock().map_err(|e| e.to_string())?;
         let barrier = self.mutation_gate.install()?;
+        crate::animated_wallpaper::stop();
         self.revision.fetch_add(1, Ordering::SeqCst);
         Ok(barrier)
     }
@@ -151,6 +154,12 @@ impl Engine {
             return Err("Waiting for Wi-Fi before downloading the original image.".into());
         }
         let bytes = self.upscale_original(media, source, &snapshot.state.settings, revision)?;
+        if crate::motion_media::detect_format(&bytes).is_ok_and(|format| format.is_video()) {
+            return Err(
+                "4K processing supports still images and GIF frames. Videos cannot be upscaled."
+                    .into(),
+            );
+        }
         let runtime = self.inner.lock().map_err(|error| error.to_string())?;
         if !self.source_is_current(&runtime, source, revision) {
             return Err("Image request cancelled because settings changed.".into());
@@ -190,9 +199,10 @@ impl Engine {
             std::slice::from_ref(&managed),
         );
         items.retain(|media| {
-            !PathBuf::from(&media.url)
-                .canonicalize()
-                .is_ok_and(|path| path.starts_with(&managed))
+            !is_video_item(media)
+                && !PathBuf::from(&media.url)
+                    .canonicalize()
+                    .is_ok_and(|path| path.starts_with(&managed))
         });
         if !errors.is_empty() {
             return Err(errors.join("\n"));
@@ -259,6 +269,12 @@ impl Engine {
             return Err("Waiting for Wi-Fi before downloading the original image.".into());
         }
         let bytes = self.upscale_original(media, source, &snapshot.state.settings, revision)?;
+        if crate::motion_media::detect_format(&bytes).is_ok_and(|format| format.is_video()) {
+            return Err(
+                "4K processing supports still images and GIF frames. Videos cannot be upscaled."
+                    .into(),
+            );
+        }
         let runtime = self.inner.lock().map_err(|e| e.to_string())?;
         if !self.source_is_current(&runtime, source, revision) {
             return Err("Sources changed during processing. Start a new job.".into());
@@ -424,6 +440,14 @@ impl Engine {
         {
             next.current = None;
         }
+        storage::normalize_lock_selection(&mut next);
+        if next
+            .lock_current
+            .as_ref()
+            .is_some_and(|media| references(&media.url))
+        {
+            storage::clear_lock_status(&mut next);
+        }
         let mut persistent = runtime.persistent.clone();
         persistent.catalogs.retain(|id, _| !removed.contains(id));
         for catalog in persistent.catalogs.values_mut() {
@@ -461,15 +485,21 @@ impl Engine {
         let mut runtime = self.inner.lock().map_err(|e| e.to_string())?;
         self.mutation_gate.ensure_open()?;
         runtime.cache_epoch = runtime.cache_epoch.wrapping_add(1);
+        let motion_files = active_motion_files(&runtime);
         for entry in fs::read_dir(&self.store.cache).map_err(|e| e.to_string())? {
             let entry = entry.map_err(|e| e.to_string())?;
             if runtime.wallpaper_path.as_deref() != Some(entry.path().as_path())
+                && !motion_files.contains(&entry.path())
                 && entry.file_type().map_err(|e| e.to_string())?.is_file()
             {
                 fs::remove_file(entry.path()).map_err(|e| e.to_string())?;
             }
         }
         runtime.persistent.cache_owners.clear();
+        runtime
+            .persistent
+            .motion_owners
+            .retain(|name, _| motion_files.contains(&self.store.cache.join(name)));
         self.store.save_runtime(&runtime.persistent)
     }
     pub fn new(store: Store) -> Result<Self, String> {
@@ -487,6 +517,8 @@ impl Engine {
                 RuntimeState::default()
             }
         };
+        storage::normalize_lock_selection(&mut state);
+        let lock_next_due = lock_due_after_restart(&state);
         storage::reconcile_catalogs(&mut persistent, &state.sources, &store.cache);
         store.save_runtime(&persistent)?;
         let wallpaper_path = fs::read_dir(store.root.join("wallpaper"))
@@ -502,7 +534,9 @@ impl Engine {
             inner: Mutex::new(Runtime {
                 state,
                 next_due: Instant::now(),
+                lock_next_due,
                 wallpaper_path,
+                motion_path: None,
                 media: Vec::new(),
                 persistent,
                 cache_epoch: 0,
@@ -511,6 +545,7 @@ impl Engine {
             client: providers::client()?,
             revision: AtomicU64::new(0),
             rotation: Mutex::new(()),
+            lock_rotation: Mutex::new(()),
             mutation_gate: crate::update_policy::MutationGate::default(),
         })
     }
@@ -609,7 +644,10 @@ impl Engine {
             })
     }
     fn persist_cache(&self, runtime: &mut Runtime) -> Result<(), String> {
-        self.trim_cache(runtime.state.settings.cache_limit_mb, None)?;
+        self.trim_cache_excluding(
+            runtime.state.settings.cache_limit_mb,
+            &active_motion_files(runtime),
+        )?;
         storage::prune_cache_owners(&mut runtime.persistent, &self.store.cache);
         self.store.save_runtime(&runtime.persistent)
     }
@@ -634,8 +672,268 @@ impl Engine {
         )?;
         self.persist_cache(&mut runtime)
     }
+    fn stage_motion(
+        &self,
+        bytes: &[u8],
+        source: &Source,
+        revision: u64,
+    ) -> Result<PathBuf, String> {
+        let mut runtime = self.inner.lock().map_err(|error| error.to_string())?;
+        if !self.source_is_current(&runtime, source, revision) {
+            return Err("Media request cancelled because settings changed.".into());
+        }
+        use sha2::{Digest, Sha256};
+        let format = crate::motion_media::detect_format(bytes)?;
+        let limit = if format.is_video() {
+            crate::motion_media::MAX_VIDEO_BYTES
+        } else {
+            crate::motion_media::MAX_STILL_BYTES
+        };
+        if bytes.len() as u64 > limit {
+            return Err("Media exceeds its size limit.".into());
+        }
+        // Bind staged content to its source grant, even when two sources share identical bytes.
+        let path = self.store.cache.join(format!(
+            "motion-{}-{:x}.{}",
+            storage::source_fingerprint(source),
+            Sha256::digest(bytes),
+            format.extension()
+        ));
+        if !path.is_file() {
+            storage::atomic_write(&path, bytes)?;
+        }
+        let name = path
+            .file_name()
+            .ok_or("Invalid cached media filename.")?
+            .to_string_lossy()
+            .into_owned();
+        runtime.persistent.motion_owners.insert(
+            name,
+            storage::CacheOwner {
+                source_id: source.id.clone(),
+                fingerprint: storage::source_fingerprint(source),
+            },
+        );
+        self.store.save_runtime(&runtime.persistent)?;
+        Ok(path)
+    }
+    pub fn playback_preview(&self, id: &str) -> Result<String, String> {
+        let (snapshot, revision) = self.operation_snapshot()?;
+        let media = snapshot
+            .media
+            .iter()
+            .chain(snapshot.state.current.iter())
+            .chain(snapshot.state.lock_current.iter())
+            .chain(
+                snapshot
+                    .persistent
+                    .catalogs
+                    .values()
+                    .flat_map(|catalog| catalog.items.iter()),
+            )
+            .find(|media| media.id == id)
+            .ok_or("Media is no longer in the library. Refresh the library first.")?;
+        let source = snapshot
+            .state
+            .sources
+            .iter()
+            .find(|source| source.enabled && source.id == media.source_id)
+            .ok_or("The media source has been removed or disabled.")?;
+        if source.kind != "local"
+            && snapshot.state.settings.wifi_only
+            && !wallpaper::wifi_connected()
+            && !self.store.cache.join(format!("{}.img", media.id)).is_file()
+        {
+            return Err("Waiting for Wi-Fi before downloading media.".into());
+        }
+        let bytes = self.prepare(media, source, &snapshot.state.settings, revision)?;
+        if !crate::motion_media::detect_format(&bytes)?.is_motion() {
+            return Err("This file is a still image.".into());
+        }
+        let path = self.stage_motion(&bytes, source, revision)?;
+        Ok(path.to_string_lossy().into_owned())
+    }
+    fn restore_motion(&self) -> Result<(), String> {
+        let (snapshot, revision) = self.operation_snapshot()?;
+        if !snapshot.state.settings.animated_wallpaper {
+            return Ok(());
+        }
+        let Some(media) = snapshot.state.current.as_ref() else {
+            return Ok(());
+        };
+        let Some(source) = snapshot
+            .state
+            .sources
+            .iter()
+            .find(|source| source.enabled && source.id == media.source_id)
+        else {
+            return Ok(());
+        };
+        if source.kind != "local"
+            && snapshot.state.settings.wifi_only
+            && !wallpaper::wifi_connected()
+            && !self.store.cache.join(format!("{}.img", media.id)).is_file()
+        {
+            return Ok(());
+        }
+        let bytes = self.prepare(media, source, &snapshot.state.settings, revision)?;
+        if !crate::motion_media::detect_format(&bytes)?.is_motion() {
+            return Ok(());
+        }
+        let path = self.stage_motion(&bytes, source, revision)?;
+        let mut runtime = self.inner.lock().map_err(|error| error.to_string())?;
+        if !self.source_is_current(&runtime, source, revision) {
+            return Ok(());
+        }
+        crate::animated_wallpaper::start(&path, &snapshot.state.settings.fit)?;
+        runtime.motion_path = Some(path);
+        crate::animated_wallpaper::set_paused(false)?;
+        self.persist_cache(&mut runtime)
+    }
     pub fn rotate(&self, automatic: bool) -> Result<AppState, String> {
         self.rotate_selection(automatic, None, false)
+    }
+    pub fn rotate_lock(
+        &self,
+        automatic: bool,
+        source_id: Option<&str>,
+        start_running: bool,
+    ) -> Result<AppState, String> {
+        let _rotation = self
+            .lock_rotation
+            .lock()
+            .map_err(|error| error.to_string())?;
+        let (mut snapshot, revision) = self.operation_snapshot()?;
+        if automatic {
+            let now = chrono::Local::now();
+            if !snapshot.state.settings.lock_running
+                || Instant::now() < snapshot.lock_next_due
+                || !rotation::schedule_allows(
+                    &snapshot.state.settings,
+                    now.weekday().num_days_from_sunday(),
+                    now.hour() * 60 + now.minute(),
+                )
+            {
+                return Ok(storage::public_state(&mut snapshot.state));
+            }
+        }
+        let selected_id = source_id
+            .unwrap_or(&snapshot.state.settings.lock_source_id)
+            .to_owned();
+        let source = snapshot
+            .state
+            .sources
+            .iter()
+            .find(|source| source.enabled && source.id == selected_id)
+            .ok_or("Select an enabled Lock screen source first.")?
+            .clone();
+        let mut selection = snapshot.state.clone();
+        selection
+            .sources
+            .retain(|candidate| candidate.id == selected_id);
+        let (mut items, mut errors) = self.list(&selection, &mut snapshot.persistent, revision);
+        let mut shuffle = if selected_id == snapshot.state.settings.lock_source_id {
+            snapshot.persistent.lock_shuffle.clone()
+        } else {
+            Default::default()
+        };
+        let previous = snapshot
+            .state
+            .lock_current
+            .as_ref()
+            .filter(|media| media.source_id == selected_id);
+        let ids = items
+            .iter()
+            .map(|media| media.id.clone())
+            .collect::<Vec<_>>();
+        let shuffled = snapshot.state.settings.order == "shuffle";
+        if !shuffled {
+            let previous_index =
+                previous.and_then(|media| items.iter().position(|item| item.id == media.id));
+            if let Some(index) = rotation::choose_index(items.len(), previous_index, false) {
+                items.rotate_left(index);
+            }
+        }
+        let directory = self.store.root.join("lock-wallpaper");
+        let mut applied = false;
+        for attempt in 0..items.len().min(20) {
+            if self.revision.load(Ordering::SeqCst) != revision {
+                return self.snapshot();
+            }
+            let media = if shuffled {
+                let Some(id) = shuffle.next(&ids, previous.map(|media| media.id.as_str())) else {
+                    break;
+                };
+                let Some(media) = items.iter().find(|media| media.id == id) else {
+                    continue;
+                };
+                media
+            } else {
+                &items[attempt]
+            };
+            if items.len() > 1 && previous.is_some_and(|previous| previous.id == media.id) {
+                continue;
+            }
+            let prepared = self
+                .prepare(media, &source, &snapshot.state.settings, revision)
+                .and_then(|bytes| crate::motion_media::wallpaper_bytes(&bytes, &self.store.cache))
+                .and_then(|poster| {
+                    wallpaper::prepare(&poster, &snapshot.state.settings, &directory)
+                });
+            let path = match prepared {
+                Ok(path) => path,
+                Err(error) => {
+                    errors.push(format!("{}: {error}", media.name));
+                    continue;
+                }
+            };
+            let mut runtime = self.inner.lock().map_err(|error| error.to_string())?;
+            if !self.source_is_current(&runtime, &source, revision) {
+                let _ = fs::remove_file(path);
+                return Ok(storage::public_state(&mut runtime.state));
+            }
+            match wallpaper::apply_lock_prepared(&path, &directory) {
+                Ok(()) => {
+                    if runtime.state.settings.lock_source_id != selected_id {
+                        storage::clear_lock_status(&mut runtime.state);
+                    }
+                    runtime.state.settings.lock_source_id = selected_id.clone();
+                    if start_running {
+                        runtime.state.settings.lock_running = true;
+                    }
+                    runtime.state.lock_current = Some(media.clone());
+                    runtime.state.lock_last_changed = Some(chrono::Utc::now().to_rfc3339());
+                    applied = true;
+                    break;
+                }
+                Err(error) => {
+                    let _ = fs::remove_file(path);
+                    errors.push(error);
+                }
+            }
+        }
+        let mut runtime = self.inner.lock().map_err(|error| error.to_string())?;
+        if self.revision.load(Ordering::SeqCst) != revision {
+            return Ok(storage::public_state(&mut runtime.state));
+        }
+        // Merge only the selected catalog. Home owns its media list and shuffle cursor.
+        if let Some(catalog) = snapshot.persistent.catalogs.remove(&selected_id) {
+            runtime.persistent.catalogs.insert(selected_id, catalog);
+        }
+        runtime.persistent.lock_shuffle = shuffle;
+        if items.is_empty() && errors.is_empty() {
+            errors.push("No supported media found in the Lock screen source.".into());
+        }
+        runtime.state.lock_error = (!errors.is_empty()).then(|| errors.join("\n"));
+        runtime.lock_next_due = Instant::now()
+            + Duration::from_secs(if applied {
+                runtime.state.settings.lock_interval_seconds
+            } else {
+                30
+            });
+        self.store.save(&runtime.state)?;
+        self.persist_cache(&mut runtime)?;
+        Ok(storage::public_state(&mut runtime.state))
     }
     pub fn rotate_selection(
         &self,
@@ -646,6 +944,10 @@ impl Engine {
         // Serialize rotations without blocking state, settings, or pause controls.
         let _rotation = self.rotation.lock().map_err(|e| e.to_string())?;
         let (mut snapshot, revision) = self.operation_snapshot()?;
+        let explicit_source = source_id.is_some();
+        let configured_source = snapshot.state.settings.home_source_id.clone();
+        let source_id = source_id
+            .or_else(|| (!configured_source.is_empty()).then_some(configured_source.as_str()));
         if automatic {
             let now = chrono::Local::now();
             if !snapshot.state.running
@@ -730,14 +1032,27 @@ impl Engine {
             let result = self
                 .prepare(media, source, &snapshot.state.settings, revision)
                 .and_then(|bytes| {
+                    let format = crate::motion_media::detect_format(&bytes)?;
+                    let motion_path =
+                        if snapshot.state.settings.animated_wallpaper && format.is_motion() {
+                            Some(self.stage_motion(&bytes, source, revision)?)
+                        } else {
+                            None
+                        };
+                    let bytes = if format.is_video() {
+                        crate::motion_media::wallpaper_bytes(&bytes, &self.store.cache)?
+                    } else {
+                        bytes
+                    };
                     wallpaper::prepare(
                         &bytes,
                         &snapshot.state.settings,
                         &self.store.root.join("wallpaper"),
                     )
+                    .map(|path| (path, motion_path))
                 });
-            let path = match result {
-                Ok(path) => path,
+            let (path, motion_path) = match result {
+                Ok(prepared) => prepared,
                 Err(error) => {
                     errors.push(format!("{}: {error}", media.name));
                     continue;
@@ -751,6 +1066,17 @@ impl Engine {
             }
             match wallpaper::apply_prepared(&path, &self.store.root.join("wallpaper")) {
                 Ok(()) => {
+                    crate::animated_wallpaper::stop();
+                    runtime.motion_path = None;
+                    if let Some(path) = motion_path {
+                        match crate::animated_wallpaper::start(&path, &snapshot.state.settings.fit)
+                        {
+                            Ok(()) => {
+                                runtime.motion_path = Some(path);
+                            }
+                            Err(error) => errors.push(error),
+                        }
+                    }
                     runtime.wallpaper_path = Some(path);
                     runtime.state.current = Some(media.clone());
                     runtime.state.last_changed = Some(chrono::Utc::now().to_rfc3339());
@@ -771,7 +1097,7 @@ impl Engine {
             return Ok(storage::public_state(&mut runtime.state));
         }
         runtime.persistent.catalogs = snapshot.persistent.catalogs;
-        if source_id.is_none() {
+        if !explicit_source {
             runtime.persistent.shuffle = selection_shuffle;
         }
         runtime.media = media_list;
@@ -814,45 +1140,25 @@ impl Engine {
         &self,
         media: &MediaItem,
         source: &Source,
-        settings: &Settings,
+        _settings: &Settings,
         revision: u64,
     ) -> Result<Vec<u8>, String> {
         if source.kind == "local" {
-            let mut bytes = Vec::new();
-            fs::File::open(&media.url)
-                .map_err(|_| "Local image is no longer accessible.".to_string())?
-                .take(providers::MAX_IMAGE_BYTES + 1)
-                .read_to_end(&mut bytes)
-                .map_err(|e| e.to_string())?;
-            if bytes.len() as u64 > providers::MAX_IMAGE_BYTES {
-                return Err("Local image exceeds 32 MB.".into());
-            }
-            return Ok(bytes);
+            return crate::motion_media::read_bounded(
+                fs::File::open(&media.url)
+                    .map_err(|_| "Local image is no longer accessible.".to_string())?,
+            );
         }
         let path = self.store.cache.join(format!("{}.img", media.id));
         if path.exists() {
-            let mut bytes = Vec::new();
-            fs::File::open(path)
-                .map_err(|error| error.to_string())?
-                .take(providers::MAX_IMAGE_BYTES + 1)
-                .read_to_end(&mut bytes)
-                .map_err(|error| error.to_string())?;
-            if bytes.len() as u64 > providers::MAX_IMAGE_BYTES {
-                return Err("Cached original image exceeds 32 MB.".into());
-            }
-            return Ok(bytes);
+            return crate::motion_media::read_bounded(
+                fs::File::open(path).map_err(|error| error.to_string())?,
+            );
         }
         let bytes = providers::download(&self.client, media, source)?;
-        wallpaper::render(&bytes, settings, (1, 1))?;
+        crate::motion_media::poster_bytes(&bytes, &self.store.cache)?;
         self.cache_bytes(media, source, revision, ".img", &bytes)?;
         Ok(bytes)
-    }
-    fn trim_cache(&self, limit_mb: u64, keep: Option<&std::path::Path>) -> Result<(), String> {
-        let keep = keep
-            .into_iter()
-            .map(|path| path.to_path_buf())
-            .collect::<Vec<_>>();
-        self.trim_cache_excluding(limit_mb, &keep)
     }
     fn trim_cache_excluding(&self, limit_mb: u64, keep: &[PathBuf]) -> Result<(), String> {
         let mut files: Vec<_> = fs::read_dir(&self.store.cache)
@@ -975,7 +1281,7 @@ impl Engine {
                 return Err("Waiting for Wi-Fi before downloading preview.".into());
             }
             let bytes = self.prepare(media, source, &snapshot.state.settings, revision)?;
-            let preview = wallpaper::thumbnail(&bytes)?;
+            let preview = crate::motion_media::poster_bytes(&bytes, &self.store.cache)?;
             self.cache_bytes(media, source, revision, "-preview.png", &preview)?;
         }
         let runtime = self.inner.lock().map_err(|e| e.to_string())?;
@@ -1034,10 +1340,60 @@ impl Engine {
         });
         state.last_changed = runtime.state.last_changed.clone();
         state.error = None;
+        storage::preserve_lock_status(&mut state, &runtime.state);
+        let home_changed = {
+            let mut previous_settings =
+                serde_json::to_value(&runtime.state.settings).map_err(|error| error.to_string())?;
+            let mut next_settings =
+                serde_json::to_value(&state.settings).map_err(|error| error.to_string())?;
+            for key in ["lockSourceId", "lockRunning", "lockIntervalSeconds"] {
+                previous_settings.as_object_mut().unwrap().remove(key);
+                next_settings.as_object_mut().unwrap().remove(key);
+            }
+            previous_settings != next_settings
+                || state.running != runtime.state.running
+                || state
+                    .sources
+                    .iter()
+                    .map(storage::source_fingerprint)
+                    .collect::<Vec<_>>()
+                    != runtime
+                        .state
+                        .sources
+                        .iter()
+                        .map(storage::source_fingerprint)
+                        .collect::<Vec<_>>()
+        };
+        let lock_source_changed = {
+            let old = runtime
+                .state
+                .sources
+                .iter()
+                .find(|source| source.id == runtime.state.settings.lock_source_id);
+            let new = state
+                .sources
+                .iter()
+                .find(|source| source.id == state.settings.lock_source_id);
+            old.map(storage::source_fingerprint) != new.map(storage::source_fingerprint)
+        };
+        let lock_schedule_changed = state.settings.lock_source_id
+            != runtime.state.settings.lock_source_id
+            || lock_source_changed
+            || state.settings.lock_running != runtime.state.settings.lock_running
+            || state.settings.lock_interval_seconds != runtime.state.settings.lock_interval_seconds;
+        if lock_source_changed
+            || state.settings.lock_source_id != runtime.state.settings.lock_source_id
+        {
+            runtime.persistent.lock_shuffle = Default::default();
+        }
         if state.settings.autostart != runtime.state.settings.autostart {
             wallpaper::set_autostart(state.settings.autostart)?;
         }
         self.store.save(&state)?;
+        if !state.settings.animated_wallpaper || state.current.is_none() {
+            crate::animated_wallpaper::stop();
+            runtime.motion_path = None;
+        }
         for source in &state.sources {
             crate::google::commit_connection(&source.id)?;
         }
@@ -1047,18 +1403,38 @@ impl Engine {
             }
         }
         storage::reconcile_catalogs(&mut runtime.persistent, &state.sources, &self.store.cache);
-        runtime.media.clear();
+        if home_changed {
+            runtime.media.clear();
+        }
         self.store.save_runtime(&runtime.persistent)?;
         let previous_sources = runtime.state.sources.clone();
+        let restore_motion = state.settings.animated_wallpaper
+            && state.current.is_some()
+            && (runtime.motion_path.is_none() || state.settings.fit != runtime.state.settings.fit);
         runtime.state = state;
-        runtime.next_due = Instant::now();
+        if home_changed {
+            runtime.next_due = Instant::now();
+        }
+        if lock_schedule_changed {
+            runtime.lock_next_due = Instant::now();
+        }
         self.persist_cache(&mut runtime)?;
         crate::google::cleanup_obsolete_imports(
             &self.store.root,
             &previous_sources,
             &runtime.state.sources,
         );
-        Ok(storage::public_state(&mut runtime.state))
+        let public = storage::public_state(&mut runtime.state);
+        drop(runtime);
+        if restore_motion {
+            if let Err(error) = self.restore_motion() {
+                let mut runtime = self.inner.lock().map_err(|error| error.to_string())?;
+                runtime.state.error = Some(error);
+                self.store.save(&runtime.state)?;
+                return Ok(storage::public_state(&mut runtime.state));
+            }
+        }
+        Ok(public)
     }
 }
 
@@ -1146,26 +1522,118 @@ mod update_install_tests {
     }
 }
 
+fn lock_due_after_restart(state: &AppState) -> Instant {
+    let elapsed = state
+        .lock_last_changed
+        .as_deref()
+        .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+        .map(|value| {
+            chrono::Utc::now()
+                .signed_duration_since(value)
+                .num_seconds()
+                .max(0) as u64
+        });
+    Instant::now()
+        + Duration::from_secs(elapsed.map_or(0, |elapsed| {
+            state.settings.lock_interval_seconds.saturating_sub(elapsed)
+        }))
+}
+
+fn active_motion_files(runtime: &Runtime) -> Vec<PathBuf> {
+    runtime
+        .motion_path
+        .iter()
+        .flat_map(|path| [path.clone(), path.with_extension("poster.png")])
+        .collect()
+}
+
+fn is_video_item(media: &MediaItem) -> bool {
+    [&media.name, &media.url].iter().any(|value| {
+        value
+            .split(['?', '#'])
+            .next()
+            .and_then(|value| value.rsplit('.').next())
+            .is_some_and(|extension| {
+                extension.eq_ignore_ascii_case("mp4") || extension.eq_ignore_ascii_case("webm")
+            })
+    })
+}
+
 pub fn start_worker(app: tauri::AppHandle, engine: Arc<Engine>) {
+    let lock_engine = engine.clone();
+    let lock_app = app.clone();
     std::thread::spawn(move || loop {
         std::thread::sleep(Duration::from_secs(1));
-        if engine.mutation_gate.ensure_open().is_err() {
+        if lock_engine.mutation_gate.ensure_open().is_err() {
             continue;
         }
-        let before = engine.snapshot().ok().map(|s| (s.last_changed, s.error));
-        match engine.rotate(true) {
+        let before = lock_engine
+            .snapshot()
+            .ok()
+            .map(|state| (state.lock_last_changed, state.lock_error));
+        match lock_engine.rotate_lock(true, None, false) {
             Ok(state) => {
-                if Some((state.last_changed.clone(), state.error.clone())) != before {
-                    let _ = app.emit("wallta:state", state);
+                if Some((state.lock_last_changed.clone(), state.lock_error.clone())) != before {
+                    let _ = lock_app.emit("wallta:state", state);
                 }
             }
             Err(error) => {
-                if let Ok(mut runtime) = engine.inner.lock() {
-                    if engine.mutation_gate.ensure_open().is_err() {
+                if let Ok(mut runtime) = lock_engine.inner.lock() {
+                    if lock_engine.mutation_gate.ensure_open().is_err() {
                         continue;
                     }
-                    runtime.state.error = Some(error);
-                    runtime.next_due = Instant::now() + Duration::from_secs(30);
+                    runtime.state.lock_error = Some(error);
+                    runtime.lock_next_due = Instant::now() + Duration::from_secs(30);
+                    let _ = lock_engine.store.save(&runtime.state);
+                    if Some((
+                        runtime.state.lock_last_changed.clone(),
+                        runtime.state.lock_error.clone(),
+                    )) != before
+                    {
+                        let _ = lock_app
+                            .emit("wallta:state", storage::public_state(&mut runtime.state));
+                    }
+                }
+            }
+        }
+    });
+    std::thread::spawn(move || {
+        if let Err(error) = engine.restore_motion() {
+            if let Ok(mut runtime) = engine.inner.lock() {
+                runtime.state.error = Some(error);
+            }
+        }
+        loop {
+            std::thread::sleep(Duration::from_secs(1));
+            if engine.mutation_gate.ensure_open().is_err() {
+                continue;
+            }
+            let before = engine.snapshot().ok().map(|s| (s.last_changed, s.error));
+            match engine.rotate(true) {
+                Ok(state) => {
+                    if Some((state.last_changed.clone(), state.error.clone())) != before {
+                        let _ = app.emit("wallta:state", state);
+                    }
+                }
+                Err(error) => {
+                    if let Ok(mut runtime) = engine.inner.lock() {
+                        if engine.mutation_gate.ensure_open().is_err() {
+                            continue;
+                        }
+                        runtime.state.error = Some(error);
+                        runtime.next_due = Instant::now() + Duration::from_secs(30);
+                    }
+                }
+            }
+            if let Ok(mut runtime) = engine.inner.lock() {
+                if runtime.motion_path.is_some() && engine.mutation_gate.ensure_open().is_ok() {
+                    if let Err(error) = crate::animated_wallpaper::health() {
+                        crate::animated_wallpaper::stop();
+                        runtime.motion_path = None;
+                        runtime.state.error = Some(error);
+                        let _ = engine.store.save(&runtime.state);
+                        let _ = app.emit("wallta:state", storage::public_state(&mut runtime.state));
+                    }
                 }
             }
         }
@@ -1197,6 +1665,15 @@ pub async fn get_preview(
     let engine = engine.inner().clone();
     blocking(move || engine.preview(&id)).await
 }
+
+#[tauri::command]
+pub async fn get_playback_preview(
+    id: String,
+    engine: tauri::State<'_, Arc<Engine>>,
+) -> Result<String, String> {
+    let engine = engine.inner().clone();
+    blocking(move || engine.playback_preview(&id)).await
+}
 #[tauri::command]
 pub async fn next_wallpaper(
     source_id: Option<String>,
@@ -1206,6 +1683,19 @@ pub async fn next_wallpaper(
     let engine = engine.inner().clone();
     blocking(move || {
         engine.rotate_selection(false, source_id.as_deref(), start_running.unwrap_or(false))
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn next_lock_wallpaper(
+    source_id: Option<String>,
+    start_running: Option<bool>,
+    engine: tauri::State<'_, Arc<Engine>>,
+) -> Result<AppState, String> {
+    let engine = engine.inner().clone();
+    blocking(move || {
+        engine.rotate_lock(false, source_id.as_deref(), start_running.unwrap_or(false))
     })
     .await
 }
@@ -1246,7 +1736,7 @@ pub async fn clear_cache(
 
 #[tauri::command]
 pub fn get_capabilities() -> Capabilities {
-    Capabilities { platform: if cfg!(windows) { "windows" } else { "browser" }, wallpaper: cfg!(windows), screensaver: false, min_interval_seconds: 10, notes: vec!["Rotation runs in the native process after closing the window. Quit from the tray stops rotation.", "Blurred background applies to Fit mode. Desktop clock overlay is not supported.", "Google sources require your own API credentials. Expired tokens must be reconnected."] }
+    Capabilities { platform: if cfg!(windows) { "windows" } else { "browser" }, wallpaper: cfg!(windows), lock_wallpaper: cfg!(windows), screensaver: false, min_interval_seconds: 10, notes: vec!["Rotation runs in the native process after closing the window. Quit from the tray stops rotation.", "Blurred background applies to Fit mode. Desktop clock overlay is not supported.", "Google sources require your own API credentials. Expired tokens must be reconnected."] }
 }
 #[tauri::command]
 pub async fn open_external(url: String) -> Result<(), String> {
@@ -1920,5 +2410,185 @@ mod photo_preview_tests {
             .unwrap();
         assert!(result.exists() && original.exists());
         assert!(!old.exists());
+    }
+}
+
+#[cfg(test)]
+mod lock_state_tests {
+    use super::*;
+    use serde_json::{json, Value};
+
+    fn fixture() -> (tempfile::TempDir, Engine) {
+        let temp = tempfile::tempdir().unwrap();
+        let engine =
+            Engine::new(Store::new(temp.path().join("data"), temp.path().join("cache")).unwrap())
+                .unwrap();
+        let state = serde_json::from_value(json!({
+            "sources":[{"id":"home","name":"Home","kind":"local","location":"home"}, {"id":"lock","name":"Lock","kind":"local","location":"lock"}],
+            "settings":{"lockSourceId":"lock", "lockRunning":true},
+            "current":{"id":"home-image","name":"Home","url":"home.jpg","sourceId":"home"},
+            "lockCurrent":{"id":"lock-image","name":"Lock","url":"lock.jpg","sourceId":"lock"},
+            "lockLastChanged":"2026-11-12T01:02:03Z", "lockError":"OS denied access"
+        })).unwrap();
+        engine.inner.lock().unwrap().state = state;
+        (temp, engine)
+    }
+
+    #[test]
+    fn lock_status_survives_stale_ui_save_and_restart_without_changing_home() {
+        let (_temp, engine) = fixture();
+        let mut stale = serde_json::to_value(engine.snapshot().unwrap()).unwrap();
+        stale["lockCurrent"] = Value::Null;
+        stale["lockLastChanged"] = Value::Null;
+        stale["lockError"] = Value::Null;
+        let saved = engine
+            .save_state(serde_json::from_value(stale).unwrap())
+            .unwrap();
+        let value = serde_json::to_value(saved).unwrap();
+        assert_eq!(value["lockCurrent"]["id"], "lock-image");
+        assert_eq!(value["lockLastChanged"], "2026-11-12T01:02:03Z");
+        assert_eq!(value["lockError"], "OS denied access");
+        assert_eq!(value["current"]["id"], "home-image");
+        let reopened = Engine::new(engine.store.clone()).unwrap();
+        assert_eq!(
+            serde_json::to_value(reopened.snapshot().unwrap()).unwrap()["lockCurrent"]["id"],
+            "lock-image"
+        );
+    }
+
+    #[test]
+    fn lock_selection_and_status_clear_when_source_disabled_or_removed() {
+        for remove in [false, true] {
+            let (_temp, engine) = fixture();
+            let mut state = engine.snapshot().unwrap();
+            if remove {
+                state.sources.retain(|source| source.id != "lock");
+            } else {
+                state.sources[1].enabled = false;
+            }
+            let value = serde_json::to_value(engine.save_state(state).unwrap()).unwrap();
+            assert_eq!(value["settings"]["lockSourceId"], "");
+            assert_eq!(value["settings"]["lockRunning"], false);
+            assert_eq!(value["lockCurrent"], Value::Null);
+            assert_eq!(value["lockLastChanged"], Value::Null);
+            assert_eq!(value["lockError"], Value::Null);
+            assert_eq!(value["current"]["id"], "home-image");
+        }
+    }
+
+    #[test]
+    fn home_selection_falls_back_to_all_when_selected_source_is_disabled_or_removed() {
+        for remove in [false, true] {
+            let (_temp, engine) = fixture();
+            let mut state = engine.snapshot().unwrap();
+            state.settings.home_source_id = "home".into();
+            if remove {
+                state.sources.retain(|source| source.id != "home");
+            } else {
+                state.sources[0].enabled = false;
+            }
+            let saved = engine.save_state(state).unwrap();
+            assert_eq!(saved.settings.home_source_id, "");
+            assert_eq!(saved.settings.lock_source_id, "lock");
+            let reopened = Engine::new(engine.store.clone()).unwrap();
+            assert_eq!(reopened.snapshot().unwrap().settings.home_source_id, "");
+        }
+    }
+
+    #[test]
+    fn home_selection_normalizes_legacy_invalid_saved_source_on_load() {
+        let (_temp, engine) = fixture();
+        let mut state = engine.snapshot().unwrap();
+        state.settings.home_source_id = "removed-source".into();
+        engine.store.save(&state).unwrap();
+        let reopened = Engine::new(engine.store.clone()).unwrap();
+        assert_eq!(reopened.snapshot().unwrap().settings.home_source_id, "");
+    }
+
+    #[test]
+    fn lock_only_save_preserves_home_rotation_deadline_and_library() {
+        let (_temp, engine) = fixture();
+        let due = Instant::now() + Duration::from_secs(500);
+        {
+            let mut runtime = engine.inner.lock().unwrap();
+            runtime.next_due = due;
+            let home = runtime.state.current.clone().unwrap();
+            runtime.media.push(home);
+        }
+        let mut state = engine.snapshot().unwrap();
+        state.settings.lock_interval_seconds = 123;
+        state.settings.lock_running = false;
+        engine.save_state(state).unwrap();
+        let runtime = engine.inner.lock().unwrap();
+        assert_eq!(runtime.next_due, due);
+        assert_eq!(runtime.media.len(), 1);
+    }
+
+    #[test]
+    fn lock_connection_edit_invalidates_native_status_instead_of_accepting_ui_status() {
+        let (_temp, engine) = fixture();
+        let mut state = engine.snapshot().unwrap();
+        state.sources[1].location = "new-lock".into();
+        let value = serde_json::to_value(engine.save_state(state).unwrap()).unwrap();
+        assert_eq!(value["settings"]["lockSourceId"], "lock");
+        assert_eq!(value["lockCurrent"], Value::Null);
+        assert_eq!(value["lockLastChanged"], Value::Null);
+    }
+
+    #[test]
+    fn lock_failure_preserves_home_library_status_and_shuffle() {
+        let (temp, engine) = fixture();
+        let selected = temp.path().join("lock-source");
+        fs::create_dir(&selected).unwrap();
+        fs::write(selected.join("corrupt.jpg"), b"invalid image").unwrap();
+        {
+            let mut runtime = engine.inner.lock().unwrap();
+            runtime.state.sources[1].location = selected.to_string_lossy().into_owned();
+            let home = runtime.state.current.clone().unwrap();
+            runtime.media.push(home);
+            runtime.persistent.shuffle.known = vec!["home-image".into()];
+        }
+        // Corrupt bytes fail before any operating-system wallpaper call.
+        let state = engine.rotate_lock(false, None, false).unwrap();
+        assert!(state.lock_error.is_some());
+        assert_eq!(state.current.as_ref().unwrap().id, "home-image");
+        let runtime = engine.inner.lock().unwrap();
+        assert_eq!(runtime.media.len(), 1);
+        assert_eq!(runtime.persistent.shuffle.known, vec!["home-image"]);
+    }
+
+    #[test]
+    fn lock_restart_restores_its_deadline_independently_of_home() {
+        let (_temp, engine) = fixture();
+        let mut state = engine.snapshot().unwrap();
+        state.lock_last_changed = Some(chrono::Utc::now().to_rfc3339());
+        engine.store.save(&state).unwrap();
+        let reopened = Engine::new(engine.store.clone()).unwrap();
+        let runtime = reopened.inner.lock().unwrap();
+        assert!(runtime.lock_next_due > Instant::now() + Duration::from_secs(800));
+        assert!(runtime.next_due <= Instant::now());
+    }
+
+    #[test]
+    fn lock_automatic_rotation_respects_its_pause_deadline_and_shared_schedule() {
+        for control in ["pause", "deadline", "schedule"] {
+            let (_temp, engine) = fixture();
+            {
+                let mut runtime = engine.inner.lock().unwrap();
+                runtime.state.running = true;
+                match control {
+                    "pause" => runtime.state.settings.lock_running = false,
+                    "deadline" => runtime.lock_next_due = Instant::now() + Duration::from_secs(600),
+                    _ => {
+                        runtime.state.settings.schedule_enabled = true;
+                        runtime.state.settings.days.clear();
+                    }
+                }
+            }
+            let before = serde_json::to_value(engine.snapshot().unwrap()).unwrap();
+            let after =
+                serde_json::to_value(engine.rotate_lock(true, None, false).unwrap()).unwrap();
+            assert_eq!(after, before, "{control}");
+        }
     }
 }

@@ -66,12 +66,76 @@ pub fn is_image(path: &str) -> bool {
         .iter()
         .any(|e| lower.ends_with(e))
 }
+pub fn is_media(path: &str) -> bool {
+    let path = path.split(['?', '#']).next().unwrap_or(path);
+    is_image(path)
+        || [".mp4", ".webm"].iter().any(|extension| {
+            path.split(['?', '#'])
+                .next()
+                .unwrap_or(path)
+                .to_ascii_lowercase()
+                .ends_with(extension)
+        })
+}
+
+#[cfg(test)]
+mod motion_tests {
+    use super::*;
+    #[test]
+    fn local_sources_enumerate_only_supported_video_containers() {
+        let directory = tempfile::tempdir().unwrap();
+        for name in [
+            "photo.png",
+            "animation.gif",
+            "clip.MP4",
+            "clip.webm",
+            "clip.avi",
+            "clip.mp4.exe",
+        ] {
+            std::fs::write(directory.path().join(name), b"listing only").unwrap();
+        }
+        let source: Source = serde_json::from_value(serde_json::json!({
+            "id":"local", "name":"local", "kind":"local", "location":directory.path()
+        }))
+        .unwrap();
+        let listed = local_list(&source).unwrap();
+        assert_eq!(listed.len(), 4);
+        assert!(listed.iter().any(|item| item.name == "clip.MP4"));
+        assert!(listed.iter().any(|item| item.name == "clip.webm"));
+    }
+    #[test]
+    fn drive_keeps_extensionless_video_urls_with_trusted_names() {
+        let source: Source = serde_json::from_value(serde_json::json!({
+            "id":"drive", "name":"drive", "kind":"drive", "location":"folder"
+        }))
+        .unwrap();
+        let listed = walk_drive(&source, "folder", |_, _| {
+            Ok(serde_json::json!({"files":[
+                {"id":"one", "name":"video.mp4", "mimeType":"video/mp4"},
+                {"id":"two", "name":"video.webm", "mimeType":"video/webm"},
+                {"id":"three", "name":"video.avi", "mimeType":"video/x-msvideo"}
+            ]}))
+        })
+        .unwrap();
+        assert_eq!(listed.len(), 2);
+        assert!(listed[0].url.ends_with("/one?alt=media"));
+        assert_eq!(listed[1].name, "video.webm");
+        assert!(is_media("https://media.test/clip.MP4?token=abc#preview"));
+        assert!(!is_media("https://media.test/clip.mp4.exe"));
+    }
+    #[test]
+    fn webdav_enumerates_supported_video_mime_without_extension() {
+        let listed = parse_webdav("<d:multistatus xmlns:d=\"DAV:\"><d:response><d:href>/media/one</d:href><d:getcontenttype>video/mp4</d:getcontenttype></d:response><d:response><d:href>/media/two</d:href><d:getcontenttype>video/x-msvideo</d:getcontenttype></d:response></d:multistatus>", "https://dav.test/media/", "dav").unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].url, "https://dav.test/media/one");
+    }
+}
 fn is_local_image(path: &Path) -> bool {
     // A canonical Windows path starts with \\?\; it is not a URL query.
     path.extension()
         .and_then(|extension| extension.to_str())
         .is_some_and(|extension| {
-            ["jpg", "jpeg", "png", "webp", "bmp", "gif"]
+            ["jpg", "jpeg", "png", "webp", "bmp", "gif", "mp4", "webm"]
                 .iter()
                 .any(|supported| extension.eq_ignore_ascii_case(supported))
         })
@@ -274,7 +338,9 @@ fn parse_webdav_page(
                                 folders.push(url);
                             } else if !collection
                                 && !url.path().ends_with('/')
-                                && (is_image(url.path()) || mime.starts_with("image/"))
+                                && (is_media(url.path())
+                                    || mime.starts_with("image/")
+                                    || matches!(mime.as_str(), "video/mp4" | "video/webm"))
                                 && images.len() < MAX_ITEMS
                             {
                                 let media = item(url.into(), None, source);
@@ -512,9 +578,9 @@ fn list_drive(client: &Client, source: &Source) -> Result<Vec<MediaItem>, String
             .filter(|time| !time.is_zero())
             .ok_or("Drive listing exceeded its 60 second limit. Use smaller folders.")?;
         let filter = if source.recursive {
-            "(mimeType contains 'image/' or mimeType = 'application/vnd.google-apps.folder')"
+            "(mimeType contains 'image/' or mimeType = 'video/mp4' or mimeType = 'video/webm' or mimeType = 'application/vnd.google-apps.folder')"
         } else {
-            "mimeType contains 'image/'"
+            "(mimeType contains 'image/' or mimeType = 'video/mp4' or mimeType = 'video/webm')"
         };
         let query = format!("'{folder}' in parents and trashed = false and {filter}");
         let mut request = client
@@ -611,7 +677,9 @@ pub fn walk_drive(
                     }
                     visited.insert(id.to_string());
                     folders.push_back((id.to_string(), depth + 1));
-                } else if mime.starts_with("image/") && file_ids.insert(id.to_string()) {
+                } else if (mime.starts_with("image/") || matches!(mime, "video/mp4" | "video/webm"))
+                    && file_ids.insert(id.to_string())
+                {
                     result.push(item(
                         format!("https://www.googleapis.com/drive/v3/files/{id}?alt=media"),
                         Some(name.into()),
@@ -736,12 +804,24 @@ pub fn download(client: &Client, media: &MediaItem, source: &Source) -> Result<V
         }
     }
     // Ambient base URLs are returned by Google's API and are short-lived; no bearer token is sent to the image host.
-    bounded_response(
-        request.send().map_err(|_| {
-            "Could not download image. The current wallpaper has been kept.".to_string()
-        })?,
-        MAX_IMAGE_BYTES,
-    )
+    let response = request
+        .send()
+        .map_err(|_| "Could not download media. The current wallpaper has been kept.".to_string())?
+        .error_for_status()
+        .map_err(|error| match error.status().map(|status| status.as_u16()) {
+            Some(401 | 403) => {
+                "Access denied. Check the source credentials and sharing permissions.".to_string()
+            }
+            Some(code) => format!("Source returned HTTP {code}."),
+            None => "Network request failed. Check your connection.".into(),
+        })?;
+    if response
+        .content_length()
+        .is_some_and(|size| size > crate::motion_media::MAX_VIDEO_BYTES)
+    {
+        return Err("Media exceeds the 128 MB download limit.".into());
+    }
+    crate::motion_media::read_bounded(response)
 }
 
 #[cfg(test)]

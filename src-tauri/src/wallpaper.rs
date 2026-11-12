@@ -138,6 +138,66 @@ pub fn apply_prepared(path: &Path, directory: &Path) -> Result<(), String> {
     }
 }
 
+/// Windows copies the unique prepared still into the current user's Lock screen.
+/// OS policy/permission failures are returned verbatim; no machine policy is changed.
+pub fn apply_lock_prepared(path: &Path, directory: &Path) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        #[link(name = "combase")]
+        extern "system" {
+            fn RoInitialize(kind: u32) -> i32;
+            fn RoUninitialize();
+        }
+        struct Apartment;
+        impl Drop for Apartment {
+            fn drop(&mut self) {
+                unsafe {
+                    RoUninitialize();
+                }
+            }
+        }
+        let initialized = unsafe { RoInitialize(1) };
+        if initialized < 0 {
+            return Err(format!(
+                "Windows Lock screen initialization failed (HRESULT 0x{:08X}).",
+                initialized as u32
+            ));
+        }
+        let _apartment = Apartment;
+        let result = (|| -> windows::core::Result<()> {
+            let file = windows::Storage::StorageFile::GetFileFromPathAsync(
+                &windows::core::HSTRING::from(path.as_os_str()),
+            )?
+            .join()?;
+            windows::System::UserProfile::LockScreen::SetImageFileAsync(&file)?.join()
+        })();
+        result.map_err(|error| {
+            format!(
+                "Windows could not apply the Lock screen image: {error} (HRESULT 0x{:08X}).",
+                error.code().0 as u32
+            )
+        })?;
+        if let Ok(entries) = std::fs::read_dir(directory) {
+            for entry in entries.flatten() {
+                if entry.path() != path
+                    && entry
+                        .path()
+                        .extension()
+                        .is_some_and(|extension| extension == "bmp")
+                {
+                    let _ = std::fs::remove_file(entry.path());
+                }
+            }
+        }
+        Ok(())
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (path, directory);
+        Err("This desktop build can apply Lock screen images only on Windows.".into())
+    }
+}
+
 pub fn set_autostart(enabled: bool) -> Result<(), String> {
     #[cfg(windows)]
     {

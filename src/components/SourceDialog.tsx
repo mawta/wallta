@@ -88,7 +88,7 @@ export function SourceDialog({ initial, initialKind = 'local', chooseFolderOnOpe
           <button type="button" className="button secondary google-reselect" disabled={busy} aria-expanded={reselectPhotos} onClick={() => { if (reselectPhotos && isNative()) void callNative('google_cancel', { sourceId: source.id, discardImports: true }).catch(err => setError(errorMessage(err))); setReselectPhotos(!reselectPhotos); }}><RefreshCw size={15} />{t("Chọn lại ảnh")}</button>
           {reselectPhotos && <GoogleConnect source={{ ...source, kind: 'photos', location: '' }} onConnected={changes => { update(changes); setReselectPhotos(false); }} />}
         </section> : <button type="button" className="folder-picker" onClick={chooseFolder} disabled={busy || picking}><FolderOpen size={26} /><strong>{picking ? t("Đang mở thư mục…") : source.location ? t("Thêm thư mục") : t("Chọn thư mục ảnh")}</strong><small>{t("JPG, PNG, WebP · Máy / USB")}</small></button>}
-        <input ref={picker} type="file" hidden multiple accept="image/jpeg,image/png,image/webp" {...({ webkitdirectory: '', directory: '' } as object)} onChange={event => {
+        <input ref={picker} type="file" hidden multiple accept="image/jpeg,image/png,image/webp,image/gif,image/bmp,video/mp4,video/webm" {...({ webkitdirectory: '', directory: '' } as object)} onChange={event => {
           const files = event.target.files;
           if (!files?.length) return;
           const count = registerPreviewFiles(source.id, files);

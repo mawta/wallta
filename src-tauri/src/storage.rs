@@ -35,9 +35,11 @@ pub struct Catalog {
 #[serde(default, rename_all = "camelCase")]
 pub struct RuntimeState {
     pub shuffle: ShuffleBag,
+    pub lock_shuffle: ShuffleBag,
     pub catalogs: HashMap<String, Catalog>,
     // IDs and hashed source identities only: never persist Photos' temporary URLs.
     pub cache_owners: HashMap<String, CacheOwner>,
+    pub motion_owners: HashMap<String, CacheOwner>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -71,6 +73,9 @@ pub fn prune_cache_owners(runtime: &mut RuntimeState, cache: &Path) {
                     .iter()
                     .any(|extension| cache.join(format!("{id}-photo.{extension}")).is_file()))
     });
+    runtime
+        .motion_owners
+        .retain(|name, _| cache.join(name).is_file());
 }
 
 pub fn source_fingerprint(source: &Source) -> String {
@@ -101,6 +106,67 @@ pub fn source_fingerprint(source: &Source) -> String {
             .push(serde_json::json!(source.effective_folders()));
     }
     format!("{:x}", Sha256::digest(identity.to_string().as_bytes()))
+}
+
+/// Selection is configuration; status is owned by the native rotation service.
+pub fn normalize_lock_selection(state: &mut AppState) {
+    normalize_home_selection(state);
+    if state.settings.lock_source_id.is_empty()
+        || !state
+            .sources
+            .iter()
+            .any(|source| source.id == state.settings.lock_source_id && source.enabled)
+    {
+        state.settings.lock_source_id.clear();
+        state.settings.lock_running = false;
+        clear_lock_status(state);
+    } else if state
+        .lock_current
+        .as_ref()
+        .is_some_and(|media| media.source_id != state.settings.lock_source_id)
+    {
+        clear_lock_status(state);
+    }
+}
+
+pub fn normalize_home_selection(state: &mut AppState) {
+    if !state.settings.home_source_id.is_empty()
+        && !state.sources.iter().any(|source| {
+            source.id == state.settings.home_source_id
+                && source.enabled
+                && !source.location.is_empty()
+        })
+    {
+        // Empty means the existing All enabled sources selection.
+        state.settings.home_source_id.clear();
+    }
+}
+
+pub fn clear_lock_status(state: &mut AppState) {
+    state.lock_current = None;
+    state.lock_last_changed = None;
+    state.lock_error = None;
+}
+
+pub fn preserve_lock_status(state: &mut AppState, previous: &AppState) {
+    clear_lock_status(state);
+    let id = &state.settings.lock_source_id;
+    let old = previous
+        .sources
+        .iter()
+        .find(|source| source.id == *id && source.enabled);
+    let new = state
+        .sources
+        .iter()
+        .find(|source| source.id == *id && source.enabled);
+    if *id == previous.settings.lock_source_id
+        && matches!((old, new), (Some(old), Some(new)) if source_fingerprint(old) == source_fingerprint(new))
+    {
+        state.lock_current = previous.lock_current.clone();
+        state.lock_last_changed = previous.lock_last_changed.clone();
+        state.lock_error = previous.lock_error.clone();
+    }
+    normalize_lock_selection(state);
 }
 pub fn offline_items(source: &Source, catalog: Option<&Catalog>, cache: &Path) -> Vec<MediaItem> {
     if !source.enabled || source.kind == "photos" || source.kind == "local" {
@@ -141,6 +207,12 @@ pub fn reconcile_catalogs(runtime: &mut RuntimeState, sources: &[Source], cache:
     runtime.cache_owners.retain(|id, owner| {
         cache_id(id) && enabled.get(owner.source_id.as_str()) == Some(&owner.fingerprint)
     });
+    runtime.motion_owners.retain(|name, owner| {
+        // Persist only a native-generated filename, never a path supplied by the UI.
+        name.starts_with("motion-")
+            && !name.contains(['/', '\\'])
+            && enabled.get(owner.source_id.as_str()) == Some(&owner.fingerprint)
+    });
     runtime.catalogs.retain(|id, catalog| {
         enabled.get(id.as_str()) == Some(&catalog.fingerprint)
             && sources
@@ -157,7 +229,19 @@ pub fn reconcile_catalogs(runtime: &mut RuntimeState, sources: &[Source], cache:
                 .strip_suffix(".img")
                 .or_else(|| name.strip_suffix("-preview.png"))
                 .or_else(|| photo_cache_id(&name));
+            let motion_name = std::path::Path::new(name.as_ref())
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .and_then(|stem| stem.strip_suffix(".poster"))
+                .and_then(|stem| {
+                    runtime
+                        .motion_owners
+                        .keys()
+                        .find(|owned| owned.starts_with(&format!("{stem}.")))
+                });
             if !id.is_some_and(|id| runtime.cache_owners.contains_key(id))
+                && !runtime.motion_owners.contains_key(name.as_ref())
+                && motion_name.is_none()
                 && entry.file_type().is_ok_and(|kind| kind.is_file())
             {
                 let _ = fs::remove_file(entry.path());
@@ -189,6 +273,7 @@ impl Store {
             load_secrets(source)?;
         }
         state.settings.validate()?;
+        normalize_lock_selection(&mut state);
         Ok(state)
     }
     pub fn save(&self, state: &AppState) -> Result<(), String> {

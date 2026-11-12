@@ -535,4 +535,12 @@ export const nativeVietnamese: Record<string, string> = {
   "Choose a lock screen source first.": "Chọn nguồn cho màn hình khóa trước.",
   "This device does not allow lock screen wallpaper changes.": "Thiết bị này không cho phép đổi hình nền màn hình khóa.",
   "Launchers such as Daijishō display their own background.": "Một số launcher như Daijishō hiển thị ảnh nền riêng.",
+  "No supported media found in the Lock screen source.": "Nguồn màn hình khóa chưa có tệp hỗ trợ.",
+  "Choose a GIF, MP4 or WebM for playback preview.": "Chọn GIF, MP4 hoặc WebM để xem trước chuyển động.",
+  "Motion playback failed. Use a GIF or an MP4/WebM codec supported by this PC.": "Không phát được hình nền động. Dùng GIF hoặc video có codec máy hỗ trợ.",
+  "Windows Explorer restarted. Apply the motion wallpaper again.": "Windows Explorer đã khởi động lại. Áp dụng hình nền động lần nữa.",
+  "Unsupported media. Choose JPEG, PNG, WebP, BMP, GIF, MP4 or WebM.": "Tệp không hỗ trợ. Chọn JPEG, PNG, WebP, BMP, GIF, MP4 hoặc WebM.",
+  "Video exceeds the 128 MB limit.": "Video vượt giới hạn 128 MB.",
+  "This TV or firmware does not provide a supported Lock screen. Use Wallta in Screensaver settings.": "TV hoặc firmware này không hỗ trợ hình nền màn hình khóa. Chọn Wallta trong cài đặt bảo vệ màn hình.",
+  "Confirm Wallta in Android Live Wallpaper settings to play animated Home wallpaper.": "Chọn Wallta trong cài đặt hình nền động Android để phát trên màn hình chính.",
 };

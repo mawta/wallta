@@ -6,7 +6,7 @@ import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 
 export const repository = 'mawta/wallta';
-export const releaseNotes = 'Android: choose an existing source under Settings → Lock screen, then change the lock screen now or rotate it on your wallpaper schedule. Wallta also clarifies that launchers such as Daijishō display their own background.';
+export const releaseNotes = 'Separate Lock screen tab with its own source, switch and interval on Windows and Android. Set GIF/MP4/WebM wallpapers on the Windows primary desktop, Android Live Wallpaper and TV screensaver; motion is muted and loops, with still frames for Lock where required. Preview animated files in the library. Native support depends on the desktop, codec and firmware.';
 const readJson = async path => JSON.parse(await readFile(path,'utf8'));
 const sha256 = data => createHash('sha256').update(data).digest('hex');
 const requireValue = (value,message) => { if (!value) throw new Error(message); return value; };

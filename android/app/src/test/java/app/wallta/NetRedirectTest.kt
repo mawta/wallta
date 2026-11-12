@@ -7,6 +7,27 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class NetRedirectTest {
+    @Test fun streamedDownloadsAreBoundedAndDoNotLeakCredentialsAcrossRedirects() {
+        val server = ServerSocket(0, 10, java.net.InetAddress.getByName("127.0.0.1"))
+        val received = java.util.concurrent.CopyOnWriteArrayList<String>()
+        val worker = kotlin.concurrent.thread(isDaemon = true) { while (!server.isClosed) runCatching { server.accept().use { socket ->
+            val reader = socket.getInputStream().bufferedReader(); val path = reader.readLine().split(' ')[1]
+            while (true) { val line = reader.readLine() ?: break; if (line.isEmpty()) break; if (path == "/target") received += line }
+            val response = if (path == "/start") "HTTP/1.1 302 Found\r\nLocation: http://localhost:${server.localPort}/target\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                else "HTTP/1.1 200 OK\r\nContent-Length: 8\r\nConnection: close\r\n\r\n12345678"
+            socket.getOutputStream().write(response.toByteArray())
+        } } }
+        val file = java.io.File.createTempFile("wallta-download", ".tmp")
+        try {
+            val base = "http://127.0.0.1:${server.localPort}"
+            Net.bytes("$base/start", 8, mapOf("Authorization" to "Bearer private"), downloadTo = file)
+            assertEquals("12345678", file.readText())
+            assertFalse(received.any { it.startsWith("Authorization:", true) })
+            assertThrows(IllegalArgumentException::class.java) { Net.bytes("$base/target", 4, downloadTo = file) }
+            assertTrue(file.length() <= 4)
+            assertThrows(IllegalArgumentException::class.java) { Net.bytes("$base/start", 8, mapOf("Authorization" to "Bearer private"), allowedUrl = { it.endsWith("/start") }, downloadTo = file) }
+        } finally { file.delete(); server.close(); worker.join(1000) }
+    }
     @Test fun oversizedUnauthorizedResponseStillReportsAuthenticationFailure() {
         val server = ServerSocket(0, 1, java.net.InetAddress.getByName("127.0.0.1"))
         val worker = kotlin.concurrent.thread(isDaemon = true) {

@@ -9,6 +9,8 @@ import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertThrows
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -26,6 +28,80 @@ import java.util.UUID
 @Config(sdk = [28], manifest = Config.NONE, shadows = [LockWallpaperTest.WallpaperSink::class])
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class LockWallpaperTest {
+    @Test fun changingSelectedLockOrItsProviderClearsOnlyItsNativeStatus() = withStore { context, store ->
+        val first = source(context, store, "First")
+        val second = source(context, store, "Second")
+        val state = store.state().put("sources", JSONArray().put(first).put(second))
+        state.getJSONObject("settings").put("lockSourceId", first.getString("id"))
+        store.save(state); WallpaperEngine.applyLock(context, manual = true)
+        assertFalse(store.state().isNull("lockCurrent"))
+        val selected = store.state(); selected.getJSONObject("settings").put("lockSourceId", second.getString("id"))
+        store.save(selected)
+        assertTrue(store.state().isNull("lockCurrent"))
+        WallpaperEngine.applyLock(context, manual = true)
+        val edited = store.state()
+        edited.getJSONArray("sources").getJSONObject(1).put("recursive", true)
+        store.save(edited)
+        assertTrue(store.state().isNull("lockCurrent"))
+        assertTrue(store.state().isNull("lockLastChanged"))
+    }
+    @Test fun visibleDecoderPinsSurviveTrimAndClearUntilReleased() = withStore { context, store ->
+        val repo = MediaRepository(context, store)
+        val active = Policy.hash("active"); val next = Policy.hash("next")
+        repo.cacheFile(active).writeBytes(ByteArray(512)); repo.cacheFile(next).writeBytes(ByteArray(512))
+        ActiveMediaPins.acquire(active)
+        try {
+            repo.trim(512, keep = next)
+            assertTrue(repo.cacheFile(active).isFile)
+            assertTrue(repo.cacheFile(next).isFile)
+            repo.clear()
+            assertTrue(repo.cacheFile(active).isFile)
+            assertFalse(repo.cacheFile(next).isFile)
+        } finally { ActiveMediaPins.release(active) }
+        repo.clear()
+        assertFalse(repo.cacheFile(active).isFile)
+    }
+    @Test fun configuredHomeAndLockSourcesStaySeparateWhenBothAreEnabled() = withStore { context, store ->
+        val home = source(context, store, "Home")
+        val lock = source(context, store, "Lock")
+        val state = store.state().put("sources", JSONArray().put(home).put(lock))
+        state.getJSONObject("settings").put("homeSourceId", home.getString("id")).put("lockSourceId", lock.getString("id")).put("order", "sequential")
+        store.save(state)
+        repeat(3) { WallpaperEngine.apply(context, manual = true); WallpaperEngine.applyLock(context, manual = true) }
+        assertEquals(home.getString("id"), store.state().getJSONObject("current").getString("sourceId"))
+        assertEquals(lock.getString("id"), store.state().getJSONObject("lockCurrent").getString("sourceId"))
+        val public = store.state(true)
+        assertEquals("", public.getJSONObject("lockCurrent").getString("url"))
+        assertFalse(store.state().getJSONObject("lockCurrent").getString("url").isEmpty())
+    }
+    @Test fun legacyLockMigratesButNewLockScheduleIsIndependentOfHome() = withStore { context, store ->
+        val lock = source(context, store, "Legacy")
+        val state = store.state().put("sources", JSONArray().put(lock)).put("running", true)
+        val settings = state.getJSONObject("settings").put("lockSourceId", lock.getString("id"))
+        settings.remove("lockRunning"); settings.remove("lockIntervalSeconds")
+        store.save(state)
+        assertTrue(store.state().getJSONObject("settings").getBoolean("lockRunning"))
+        assertEquals(900, store.state().getJSONObject("settings").getInt("lockIntervalSeconds"))
+        store.setRunning(false)
+        WallpaperEngine.applyLock(context)
+        assertFalse(store.state().getBoolean("running"))
+        assertEquals(lock.getString("id"), store.state().getJSONObject("lockCurrent").getString("sourceId"))
+    }
+    @Test fun staleSavesCannotForgeLockSuccessAndRemovingSourceClearsLockState() = withStore { context, store ->
+        val lock = source(context, store, "Lock")
+        val state = store.state().put("sources", JSONArray().put(lock))
+        state.getJSONObject("settings").put("lockSourceId", lock.getString("id")).put("lockRunning", true).put("lockIntervalSeconds", 5)
+        store.save(state)
+        val stale = store.state(true)
+        WallpaperEngine.applyLock(context, manual = true)
+        val current = store.state().getJSONObject("lockCurrent").getString("id")
+        store.save(stale)
+        assertEquals(current, store.state().getJSONObject("lockCurrent").getString("id"))
+        assertEquals(900, store.state().getJSONObject("settings").getInt("lockIntervalSeconds"))
+        store.save(store.state().put("sources", JSONArray()))
+        assertFalse(store.state().getJSONObject("settings").getBoolean("lockRunning"))
+        assertTrue(store.state().isNull("lockCurrent"))
+    }
     @Test fun appliesOnlyTheSavedSourceToTheLockScreen() = withStore { context, store ->
         val home = source(context, store, "Home")
         val lock = source(context, store, "Lock")
@@ -48,7 +124,9 @@ class LockWallpaperTest {
         val manualLockId = manager.getWallpaperId(WallpaperManager.FLAG_LOCK)
         WallpaperEngine.applyLock(context)
         assertEquals(manualLockId, manager.getWallpaperId(WallpaperManager.FLAG_LOCK))
-        store.setRunning(true)
+        val enabled = store.state()
+        enabled.getJSONObject("settings").put("lockRunning", true)
+        store.save(enabled)
         WallpaperEngine.applyLock(context)
         assertNotEquals(manualLockId, manager.getWallpaperId(WallpaperManager.FLAG_LOCK))
         assertEquals(homeId, manager.getWallpaperId(WallpaperManager.FLAG_SYSTEM))

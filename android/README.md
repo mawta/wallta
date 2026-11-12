@@ -37,6 +37,14 @@ Stable GitHub Releases from 0.1.2 use a fixed signing key and support **Settings
 - Drive accounts can be saved before choosing folders, then reused for multiple accessible folders. Google Photos uses Google's Photos Picker, followed by a managed local import of up to 50 images/256 MB, at most 25 MB per image. Imports request images bounded to 4096 pixels per dimension and validate image containers and decoded pixels. Retrying or cancelling preserves the previously saved import; Clear cache preserves its originals. The separate system image picker remains an explicit file-import alternative.
 - Existing saved Laravel Drive relay and Photos Ambient sources retain their legacy provider paths. Legacy relay grants remain restricted to their approved single folder. Legacy Ambient listings retain their daily request ceiling, online requirement, one-hour image-cache lifetime and cache-purge behavior.
 
+## Lock and motion wallpaper
+
+Home and Lock each save their own source, automatic toggle and interval. A blank Home source uses all enabled sources. Lock runs independently of Home, uses a still poster for GIF/video, and is disabled on TV firmware. Android WorkManager intervals remain at least 15 minutes and may be delayed by power management.
+
+Enable Animated wallpaper, then confirm Wallta in Android Live Wallpaper settings for native muted looping MP4/WebM and GIF playback on Home. The native TV screensaver uses the same animated toggle. Turning it off displays a still at the actual surface resolution; GIF/video preview thumbnails remain bounded JPEGs. Hidden/destroyed surfaces cancel pending requests and release their codecs. Removing or editing a source revalidates active playback.
+
+Native cached video downloads stream to disk and are capped at 128 MB. Image limits remain 25 MB/120 MP (64 MB for managed upscale files), animated GIF playback is capped at 8 MP, and video dimensions at 8192 pixels/32 MP. Visible decoders pin their active files against normal cache eviction. Native codec/firmware support determines MP4/WebM playback; Android 8.0 poster extraction above 4 MP requires a newer OS. Device acceptance must cover the system chooser, GIF/video motion, muted looping, source revocation, Lock-only rotation with Home stopped, and teardown while a download or codec is preparing.
+
 ## Required device acceptance checks
 
 1. Install APK on an Android 8+ phone and TV. Open the packaged UI offline. Verify D-pad focus, Back, scrolling, and a connected keyboard.

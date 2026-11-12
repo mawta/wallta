@@ -185,6 +185,11 @@ pub struct MediaItem {
 #[serde(default, rename_all = "camelCase")]
 pub struct Settings {
     pub interval_seconds: u64,
+    pub home_source_id: String,
+    pub lock_source_id: String,
+    pub lock_running: bool,
+    pub lock_interval_seconds: u64,
+    pub animated_wallpaper: bool,
     pub order: String,
     pub fit: String,
     pub blur_background: bool,
@@ -202,6 +207,11 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             interval_seconds: 900,
+            home_source_id: String::new(),
+            lock_source_id: String::new(),
+            lock_running: false,
+            lock_interval_seconds: 900,
+            animated_wallpaper: false,
             order: "shuffle".into(),
             fit: "fill".into(),
             blur_background: false,
@@ -221,6 +231,11 @@ impl Settings {
     pub fn validate(&self) -> Result<(), String> {
         if !(10..=86400 * 30).contains(&self.interval_seconds) {
             return Err("Windows interval must be at least 10 seconds and at most 30 days.".into());
+        }
+        if !(10..=86400 * 30).contains(&self.lock_interval_seconds) {
+            return Err(
+                "Lock screen interval must be at least 10 seconds and at most 30 days.".into(),
+            );
         }
         if !["shuffle", "sequential"].contains(&self.order.as_str()) {
             return Err("Unknown rotation order.".into());
@@ -256,6 +271,9 @@ pub struct AppState {
     pub current: Option<MediaItem>,
     pub last_changed: Option<String>,
     pub error: Option<String>,
+    pub lock_current: Option<MediaItem>,
+    pub lock_last_changed: Option<String>,
+    pub lock_error: Option<String>,
 }
 impl Default for AppState {
     fn default() -> Self {
@@ -267,6 +285,9 @@ impl Default for AppState {
             current: None,
             last_changed: None,
             error: None,
+            lock_current: None,
+            lock_last_changed: None,
+            lock_error: None,
         }
     }
 }
@@ -276,6 +297,7 @@ impl Default for AppState {
 pub struct Capabilities {
     pub platform: &'static str,
     pub wallpaper: bool,
+    pub lock_wallpaper: bool,
     pub screensaver: bool,
     pub min_interval_seconds: u64,
     pub notes: Vec<&'static str>,
@@ -285,6 +307,26 @@ pub struct Capabilities {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn lock_settings_default_to_independent_stopped_rotation() {
+        let state: AppState = serde_json::from_value(json!({"running":true})).unwrap();
+        let value = serde_json::to_value(state).unwrap();
+        assert_eq!(value["settings"]["lockSourceId"], "");
+        assert_eq!(value["settings"]["homeSourceId"], "");
+        assert_eq!(value["settings"]["lockRunning"], false);
+        assert_eq!(value["settings"]["animatedWallpaper"], false);
+        assert_eq!(value["settings"]["lockIntervalSeconds"], 900);
+        assert_eq!(value["lockCurrent"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn lock_interval_is_validated_independently_of_home() {
+        let settings: Settings = serde_json::from_value(json!({"lockIntervalSeconds":9})).unwrap();
+        assert!(settings.validate().is_err());
+        let settings: Settings = serde_json::from_value(json!({"lockIntervalSeconds":10})).unwrap();
+        assert!(settings.validate().is_ok());
+    }
 
     #[test]
     fn explicit_folder_array_survives_state_round_trip() {

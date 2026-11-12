@@ -37,8 +37,10 @@ class WalltaBridge(private val activity: MainActivity, private val web: WebView)
                     "list_media" -> JSONArray().apply { repo.list().forEach { put(it.json(true)) } }
                     "get_photo_preview" -> repo.photoPreview(args.getString("id"), args.getString("sourceId"))
                     "get_preview" -> { val mediaId = args.getString("id"); val media = repo.list().find { it.id == mediaId } ?: error("Image no longer available"); repo.visual(media); "${TrustedWebView.origin}/media/${media.id}.img" }
+                    "get_playback_preview" -> repo.playbackPreview(args.getString("id"))
                     "next_wallpaper" -> try { val state = WallpaperEngine.apply(activity, true, args.optString("sourceId").takeIf { it.isNotBlank() }, args.optBoolean("startRunning")); WallpaperWorker.schedule(activity); state } catch (e: Exception) { store.mutateState { it.put("error", e.message ?: "Wallpaper update failed") }; throw e }
                     "next_lock_wallpaper" -> WallpaperEngine.applyLock(activity, manual = true)
+                    "open_live_wallpaper_settings" -> { require(NativeWallpaperSupport.live(activity)) { "This firmware does not provide a live wallpaper chooser" }; activity.runOnUiThread { try { activity.startActivity(NativeWallpaperSupport.intent(activity)); reply(id, true, null) } catch (e: Exception) { reply(id, false, "Open Android Wallpaper settings and choose Wallta Live Wallpaper.") } }; return@execute }
                     "get_capabilities" -> capabilities()
                     "update_status" -> updater.status()
                     "update_check" -> updater.check(args.optBoolean("automatic", false))
@@ -76,12 +78,14 @@ class WalltaBridge(private val activity: MainActivity, private val web: WebView)
         }
     }
     private fun capabilities(): JSONObject {
-        val tv = activity.getSystemService(UiModeManager::class.java).currentModeType == Configuration.UI_MODE_TYPE_TELEVISION
+        val tv = NativeWallpaperSupport.tv(activity)
         val wm = WallpaperManager.getInstance(activity)
         val wallpaper = wm.isWallpaperSupported && wm.isSetWallpaperAllowed
         return JSONObject().put("platform", if (tv) "android-tv" else "android").put("wallpaper", wallpaper).put("screensaver", true).put("minIntervalSeconds", 900)
+            .put("lockWallpaper", NativeWallpaperSupport.lock(activity)).put("liveWallpaper", NativeWallpaperSupport.live(activity))
             .put("notes", JSONArray().put("Android schedules wallpaper changes at a minimum of 15 minutes; Doze and OEM power rules can delay execution. Screensaver slides use their own shorter interval.")
                 .put(if (tv) "Home wallpaper depends on TV firmware and launcher. Even when the Android API reports support, visually confirm it on Home. Wallta does not replace your launcher." else "Launchers such as Daijishō display their own background.")
+                .put(if (tv) "Android TV firmware normally has no Lock screen. Use native Screensaver settings for GIF/video playback." else "Animated Home wallpaper needs confirmation in Android Live Wallpaper settings. Lock uses a still poster frame; its schedule is independent of Home.")
                 .put("A firmware DocumentsProvider is needed to choose local or USB folders. USB access resumes only when the same storage remains mounted."))
     }
     private fun reply(id: String, success: Boolean, value: Any?) {

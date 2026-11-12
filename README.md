@@ -22,6 +22,8 @@ The interface supports **English and Vietnamese**. It follows the device languag
 - **Preview and compare:** open a library photo at fit or 100% size. Drag the Before/After divider over an upscaled photo to inspect the same area; mouse, touch and TV controls are supported. New upscale results remember their original source. Older collections remain viewable even without original associations. [Preview guide](docs/photo-preview.md).
 - **Upscale to 4K:** use Fast mode on Windows, Android, and TV, or local AI on Windows. Run all eligible photos or select individual images. Results become a separate collection; originals stay untouched. [Upscaling guide](docs/upscaling.md).
 - **Import from Google Photos:** choose pictures with Google Photos Picker on Windows, Android or TV. Imported photos stay on your device; choose again whenever you want to replace the collection.
+- **Separate Home and Lock:** choose a Home source from Overview, then open **Lock screen** to choose another source and its own automatic switch and interval. Windows applies still lock images through the system API; phones support lock images where allowed by the firmware. TV devices without a lock wallpaper API show its availability clearly.
+- **Animated wallpapers:** add GIF, MP4 or WebM files to a source and enable **Settings → Video & GIF**. Windows plays on the primary desktop; Android Home requires choosing Wallta in the system Live Wallpaper dialog. The TV screensaver also supports motion. Playback is muted and loops. The Lock tab uses a still frame; Android may additionally offer live Home/Lock targets in its system dialog.
 - **Use a TV screensaver:** select Wallta in the system screensaver settings, with a separate slideshow interval and an optional clock.
 - **Manage storage and updates:** clear regenerable cache, remove individual upscaled collections, and check for app updates in Settings.
 
@@ -61,6 +63,8 @@ A normal web folder link does not provide a standard way to list its images. Use
 ```json
 {"images":["a.jpg",{"url":"sub/b.webp","name":"Mountain evening"}]}
 ```
+
+GIF, MP4 and WebM URLs are also supported in this list. Video files are limited to 128 MB and require a native codec available on the device.
 
 Relative image URLs resolve against the JSON URL. A direct image URL also works. Wallta reads the originals and creates separate render/cache files.
 

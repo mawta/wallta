@@ -7,6 +7,8 @@
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-feature android:name="android.software.leanback" android:required="false" />
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
+    <uses-feature android:name="android.software.live_wallpaper" android:required="false" />
+    <queries><intent><action android:name="android.service.wallpaper.CHANGE_LIVE_WALLPAPER" /></intent></queries>
     <application android:label="Wallta" android:icon="@drawable/ic_wallta" android:banner="@drawable/tv_banner" android:theme="@style/WalltaTheme" android:allowBackup="false" android:supportsRtl="true" android:usesCleartextTraffic="true">
         <provider android:name="androidx.core.content.FileProvider" android:authorities="${applicationId}.updates" android:exported="false" android:grantUriPermissions="true">
             <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/update_paths" />
@@ -17,6 +19,10 @@
         <service android:name=".WalltaDreamService" android:exported="true" android:permission="android.permission.BIND_DREAM_SERVICE">
             <intent-filter><action android:name="android.service.dreams.DreamService" /></intent-filter>
             <meta-data android:name="android.service.dream" android:resource="@xml/dream" />
+        </service>
+        <service android:name=".WalltaLiveWallpaperService" android:label="Wallta" android:exported="true" android:permission="android.permission.BIND_WALLPAPER">
+            <intent-filter><action android:name="android.service.wallpaper.WallpaperService" /></intent-filter>
+            <meta-data android:name="android.service.wallpaper" android:resource="@xml/live_wallpaper" />
         </service>
         <receiver android:name=".BootReceiver" android:enabled="true" android:exported="false">
             <intent-filter><action android:name="android.intent.action.BOOT_COMPLETED" /><action android:name="android.intent.action.MY_PACKAGE_REPLACED" /></intent-filter>
