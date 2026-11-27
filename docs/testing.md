@@ -20,7 +20,7 @@ The installed Android APK sent the literal `pageToken=null` when opening the fir
 - Spec and independent quality review passed after fixing long-import recovery and cancellation races. Official APK signing certificate/package were registered as an Android OAuth client. The service's Web client secret remains in Script Properties, outside Git and the APK; the public privacy policy describes broker token storage.
 - **Not validated on a physical phone or TV:** release-signed native chooser/consent, end-to-end Photos selection/import on Android, installation/upgrade, firmware wallpaper and reboot behavior. No ADB device was connected. Google verification remains pending, including homepage ownership propagation; live consent still shows the unverified-app warning.
 
-[Signed release workflow](https://github.com/mawta/wallta/actions/runs/42202687298) · [Google setup](setup-google.md) · [Privacy policy](https://mawta.github.io/wallta/privacy.html).
+[Signed release workflow](https://github.com/mawta/wallta/actions/runs/42202687298) · [Google setup](setup-google.md) · [Privacy policy](https://wallta.mawta.store/privacy.html).
 
 ## Google sign-in and source dialog in 0.1.11
 
