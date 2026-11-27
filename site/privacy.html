@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="How Wallta accesses, uses, stores and deletes Google data for wallpapers and screensavers.">
+  <meta name="theme-color" content="#0d1714">
+  <link rel="canonical" href="https://wallta.mawta.store/privacy.html">
+  <link rel="icon" href="/wallta.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/style.css">
+  <title>Privacy policy — Wallta</title>
+</head>
+<body>
+  <header class="site-header"><div class="wrap header-inner">
+    <a class="brand" href="/"><img src="/wallta.svg" alt="" width="37" height="37">Wallta</a>
+    <nav class="site-nav" aria-label="Main navigation"><a href="/">Home</a><a href="/privacy.html" aria-current="page">Privacy</a><a href="/terms.html">Terms</a><a href="https://github.com/mawta/wallta/issues">Support</a></nav>
+  </div></header>
+
+  <main class="wrap document narrow">
+    <p class="eyebrow">Your data</p><h1>Privacy policy</h1>
+    <p class="lede">Wallta turns photos you choose into wallpapers and screensavers on Windows, Android and Android TV. This policy explains what happens when you use its optional Google connections.</p>
+    <p class="meta">Effective November 27, 2026 · Wallta by mawta</p>
+    <nav class="summary-links" aria-label="On this page"><a href="#access">Google access</a><a href="#storage">Storage and sharing</a><a href="#deletion">Deletion</a><a href="#contact">Contact</a></nav>
+
+    <section id="access"><h2>Google data Wallta accesses</h2>
+      <h3>Google Drive</h3>
+      <p>When you connect Drive, Wallta requests the read-only <code>drive.readonly</code> permission. This permission can read files and metadata in your Drive account. Wallta uses it to list folders, names and image metadata, and to read image contents for preview and wallpaper rotation in the folders you select. Wallta does not upload, edit or delete your Drive originals.</p>
+      <h3>Google Photos Picker</h3>
+      <p>When you choose Google Photos, Wallta requests Picker access to the photos and metadata you explicitly select. It may request basic Google account identity, including your email address when available, to label the connection in the app. Selected photos are imported as local copies; Wallta does not continuously synchronize an album. An optional older Ambient integration is available only for approved Google Photos partner configurations on supported TVs.</p>
+      <h3>Android system photo picker</h3>
+      <p>If you use Android's system picker, Wallta receives only the photos you select. Which photo providers appear depends on your device.</p>
+    </section>
+
+    <section id="storage"><h2>How data is used, stored and shared</h2>
+      <p>Wallta uses Google data to display and manage the photo features you request. Settings, source details, image caches, imported photos and saved upscaled images are stored on your device. Windows saves Google authorization credentials in Windows Credential Manager. Android uses app-private storage and Android Keystore protection for saved connection details. Local image processing does not upload photos to an AI service.</p>
+      <p>Windows connects to Google directly. On Android phones with Google Play services, Google's account chooser and authorization service grant access, and Wallta requests renewed access when needed. On Android TV and devices using QR sign-in, Wallta's Google Apps Script authorization service handles browser consent and stores the connected account email, access token and refresh token in private Script Properties. The service operator and trusted script editors can access that storage. The device holds an encrypted connection capability and requests short-lived access tokens; it receives neither the refresh token nor the Web OAuth client secret. Picture content and folder listings travel directly between Google and your device, rather than through the QR service.</p>
+      <p>QR sign-in codes expire after ten minutes. QR connections expire after thirty days without successful use. Older versions and custom builds may use an optional self-hosted Drive relay that handles authorization and passes requested images from the folder confirmed during pairing; the operator of that separate relay controls its hosting and operational policies.</p>
+      <p>Wallta does not sell Google user data, use it for advertising or train AI models on it. We do not transfer Google user data to data brokers or advertisers. Wallta's use and transfer of information received from Google APIs follows the <a href="https://developers.google.com/terms/api-services-user-data-policy">Google API Services User Data Policy</a>, including its Limited Use requirements, and the <a href="https://developers.google.com/photos/support/api-policy">Google Photos API User Data and Developer Policy</a> where applicable.</p>
+      <p>This public website does not use analytics scripts or advertising cookies. The server may process ordinary request information to deliver pages and investigate errors.</p>
+    </section>
+
+    <section id="deletion"><h2>Disconnect, retention and deletion</h2>
+      <p>Remove a connected source in Wallta to stop using it. For QR connections, Wallta also requests deletion of that device's authorization record from the Apps Script service. This request needs a network connection. If the device is offline, reconnect and remove the source before uninstalling, or contact support to request deletion; unused QR service records expire after thirty days. Canceling an unsaved QR connection requests deletion of its pending or newly issued grant.</p>
+      <p>In Wallta Settings, you can clear regenerable image cache and remove saved upscaled collections. Deleting a managed imported source removes its local imported copies. Files you exported or saved separately must be deleted separately. These actions do not remove originals from your Google account.</p>
+      <p>You can revoke Wallta's access at any time in <a href="https://myaccount.google.com/permissions">Google Account permissions</a>. Revocation stops future authorized requests but does not automatically erase copies already stored on your device. Remove those with Wallta's local controls or your device's app storage controls.</p>
+    </section>
+
+    <section id="contact"><h2>Questions or deletion requests</h2>
+      <p>Use the developer support email shown on Wallta's Google consent screen for a private data or deletion request. For general help, visit <a href="https://github.com/mawta/wallta/issues">Wallta support on GitHub</a>; do not put credentials, tokens or private images in a public issue. This policy will be updated if Wallta's Google data practices change.</p>
+    </section>
+  </main>
+
+  <footer class="site-footer"><div class="wrap site-footer-inner"><span>Wallta by mawta</span><nav class="footer-links" aria-label="Footer"><a href="/">Home</a><a href="/terms.html">Terms</a><a href="https://github.com/mawta/wallta">Source code</a></nav></div></footer>
+</body>
+</html>

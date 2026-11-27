@@ -26,7 +26,7 @@ Photos Picker chỉ cấp quyền cho những ảnh đã chọn. Wallta tải b�
 
 Dịch vụ [Google Apps Script](../google-apps-script/README.md) xử lý cấp quyền, giữ email và token Google trong Script Properties riêng của dịch vụ. Người vận hành và các biên tập viên script đáng tin cậy có thể truy cập kho này. Thiết bị giữ capability được mã hóa bằng Android Keystore và nhận access token ngắn hạn; refresh token và Web client secret không được gửi vào app. Ảnh tải trực tiếp từ Google về thiết bị.
 
-Mã đăng nhập hết hạn sau 10 phút; kết nối dịch vụ hết hạn sau 30 ngày không sử dụng. Hủy kết nối chưa lưu hoặc xóa nguồn sẽ yêu cầu dịch vụ xóa quyền của thiết bị. Cần mạng để yêu cầu này hoàn tất. Xem [chính sách dữ liệu](https://mawta.github.io/wallta/privacy.html).
+Mã đăng nhập hết hạn sau 10 phút; kết nối dịch vụ hết hạn sau 30 ngày không sử dụng. Hủy kết nối chưa lưu hoặc xóa nguồn sẽ yêu cầu dịch vụ xóa quyền của thiết bị. Cần mạng để yêu cầu này hoàn tất. Xem [chính sách dữ liệu](https://wallta.mawta.store/privacy.html).
 
 ## Bản tự build
 
