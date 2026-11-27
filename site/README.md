@@ -13,7 +13,7 @@ The HTML files here are served by a dedicated Nginx virtual host on `sva` at `ht
 
 The owner must verify the **top private domain** `mawta.store` in Google Search Console with an account that is Owner or Editor of the OAuth project. A Cloudflare DNS TXT verification is the simplest way. Only then update Branding and resubmit; website availability alone does not mean Google has approved the app. See [Google's verification requirements](https://support.google.com/cloud/answer/13464321) and [domain guidance](https://developers.google.com/identity/verification/authentication-verification).
 
-The Self Pass password backup currently uses an existing Wallta Desktop OAuth client with `drive.file` write access. Wallta itself requests `drive.readonly` for its photo features. Move Self Pass backup to a separate OAuth project/client before submitting Wallta for verification, so the app's scopes and public privacy disclosures describe the same product. Do not publish either project's credential files here.
+The owner chose to keep using the same Desktop OAuth client for a separate personal encrypted backup workflow with `drive.file` write access. Wallta itself requests `drive.readonly` for its photo features. The public homepage and privacy policy disclose the backup use without publishing the account, backup contents, token or server address. Sharing a client between unrelated products may still be rejected in Google's app review because the brand must accurately represent the application; disclosure does not guarantee approval. Do not publish credential files here.
 
 ## Deploy and check
 
